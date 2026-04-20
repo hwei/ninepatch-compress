@@ -6,3 +6,11 @@ __pycache__/
 dist/
 build/
 *.local.*
+
+# .NET build artifacts
+src/*/bin/
+src/*/obj/
+
+# Node modules
+src/NinePatch.Web/node_modules/
+src/NinePatch.Web/dist/

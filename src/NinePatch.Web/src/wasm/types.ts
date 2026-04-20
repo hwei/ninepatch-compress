@@ -1,0 +1,31 @@
+export type CompressStatus = 'success' | 'invalid_input' | 'no_valid_split' | 'savings_too_low' | 'loading' | 'idle';
+
+export interface NinePatchMeta {
+  xb: number;
+  xe: number;
+  yb: number;
+  ye: number;
+  original_width: number;
+  original_height: number;
+  compressed_width: number;
+  compressed_height: number;
+  nx: number;
+  ny: number;
+  error_x: number;
+  error_y: number;
+  error_2d: number;
+  savings_pct: number;
+  compressed_rgba_b64: string;
+}
+
+export interface CompressResult {
+  status: number;
+  message: string;
+  metadata?: NinePatchMeta;
+}
+
+export interface CompressParams {
+  threshold: number;
+  margin: number;
+  minSavings: number;
+}

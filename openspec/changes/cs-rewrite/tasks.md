@@ -73,24 +73,24 @@
 
 ## 10. Web Demo Setup
 
-- [ ] 10.1 Initialize Vite project with React + TypeScript
-- [ ] 10.2 Add UnoCSS dependency and configure
-- [ ] 10.3 Configure WASM module loading
+- [x] 10.1 Initialize Vite project with React + TypeScript
+- [x] 10.2 Add UnoCSS dependency and configure
+- [x] 10.3 Configure WASM module loading
 
 ## 11. Web Demo Implementation
 
-- [ ] 11.1 Create `ImageUpload` component (drag-drop + file picker)
-- [ ] 11.2 Create `PreviewPane` component for image display
-- [ ] 11.3 Create `NinePatchOverlay` component (SVG grid lines)
-- [ ] 11.4 Create parameter controls (threshold, margin, minSavings sliders)
-- [ ] 11.5 Create `Controller` logic for WASM calls
-- [ ] 11.6 Create error display component
-- [ ] 11.7 Create metadata display component
+- [x] 11.1 Create `ImageUpload` component (drag-drop + file picker)
+- [x] 11.2 Create `PreviewPane` component for image display
+- [x] 11.3 Create `NinePatchOverlay` component (SVG grid lines)
+- [x] 11.4 Create parameter controls (threshold, margin, minSavings sliders)
+- [x] 11.5 Create `Controller` logic for WASM calls
+- [x] 11.6 Create error display component
+- [x] 11.7 Create metadata display component
 
 ## 12. Integration & Cleanup
 
 - [ ] 12.1 Test full pipeline: CLI against Python test cases
-- [ ] 12.2 Test full pipeline: Web Demo end-to-end
+- [x] 12.2 Test full pipeline: Web Demo end-to-end
 - [ ] 12.3 Build and test AOT CLI
 - [ ] 12.4 Build and test WASM module
 - [ ] 12.5 Delete `python-impl/` directory
