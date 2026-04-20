@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import logging
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -15,6 +17,8 @@ from color_space import rgba_linear_to_u8, rgba_u8_to_linear
 from error_metric import max_error
 from resample import downsample_1d, upsample_1d
 from search_1d import SearchResult1D, search_x, search_y
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -202,6 +206,7 @@ def run_full_pipeline(
     threshold: float,
     margin: int = 0,
     min_savings: float = 30.0,
+    margin_auto_step: int = 4,
 ) -> dict | None:
     """End-to-end: linear → search → compress → reconstruct → error.
 
@@ -211,6 +216,8 @@ def run_full_pipeline(
     threshold  : max per-channel error in [0,255] scale.
     margin     : minimum corner size. Default 0.
     min_savings: minimum savings percentage to proceed. Default 30.
+    margin_auto_step: if margin=0 and search fails, retry with increasing
+                      margin by this step until search succeeds. Default 4.
 
     Returns
     -------
@@ -226,9 +233,22 @@ def run_full_pipeline(
     # Convert to linear space
     img_linear = rgba_u8_to_linear(img_u8)
 
-    # Independent X and Y search
-    res_x = search_x(img_linear, threshold=threshold, margin=margin)
-    res_y = search_y(img_linear, threshold=threshold, margin=margin)
+    # If margin=0 and search fails, auto-retry with increasing margin
+    # (e.g. for rounded-corner images where margin=0 picks up corner detail)
+    max_margin = min(H, W) // 4
+    cur_margin = margin
+
+    res_x = search_x(img_linear, threshold=threshold, margin=cur_margin)
+    res_y = search_y(img_linear, threshold=threshold, margin=cur_margin)
+
+    if (res_x is None or res_y is None) and margin == 0 and margin_auto_step > 0:
+        while cur_margin + margin_auto_step <= max_margin:
+            cur_margin += margin_auto_step
+            log.info("margin=0 search failed, retrying with margin=%d", cur_margin)
+            res_x = search_x(img_linear, threshold=threshold, margin=cur_margin)
+            res_y = search_y(img_linear, threshold=threshold, margin=cur_margin)
+            if res_x is not None and res_y is not None:
+                break
 
     if res_x is None or res_y is None:
         return None
