@@ -64,6 +64,10 @@
       font-size: 16px; font-weight: bold;
     }
 
+    /* Zoom controls */
+    .zoom-controls { display:flex; align-items:center; margin:0 0 12px 0; font-size:13px; color:#999; }
+    .zoom-controls select { margin-left:6px; background:#1a1f3a; color:#ddd; border:1px solid #334; border-radius:4px; padding:4px 8px; font-size:13px; }
+
     /* Compressed image row */
     .compressed-row {
       display: flex; flex-direction: column; align-items: center;
@@ -125,6 +129,16 @@
     <button class="bg-btn b-white" data-bg="white" title="White background"></button>
   </div>
 
+  <!-- Zoom controls -->
+  <div class="zoom-controls">
+    <label>缩放：<select id="zoomSelect">
+      <option value="1">1x</option>
+      <option value="2">2x</option>
+      <option value="4">4x</option>
+      <option value="8">8x</option>
+    </select></label>
+  </div>
+
   <!-- Comparison slider: Original vs Reconstructed -->
   <div class="comparison-wrapper">
     <div class="comparison-container" id="compContainer">
@@ -171,6 +185,13 @@ let reconBlobUrl = null;
 let sampleBlobUrls = {};
 let sliderPercent = 50;
 let isDragging = false;
+let zoomFactor = 1;
+
+// ---- Apply zoom factor to canvas CSS display size ----
+function applyZoom(canvas) {
+  canvas.style.width = (canvas.width * zoomFactor) + 'px';
+  canvas.style.height = (canvas.height * zoomFactor) + 'px';
+}
 
 // ---- Draw canvas from blob URL, proportionally scaled ----
 function drawCanvasFromUrl(canvas, url) {
@@ -182,11 +203,9 @@ function drawCanvasFromUrl(canvas, url) {
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
-      // CSS display: 1 canvas pixel = 1 CSS pixel
-      canvas.style.width = canvas.width + 'px';
-      canvas.style.height = canvas.height + 'px';
-      compContainer.style.width = canvas.width + 'px';
-      compContainer.style.height = canvas.height + 'px';
+      applyZoom(canvas);
+      compContainer.style.width = (canvas.width * zoomFactor) + 'px';
+      compContainer.style.height = (canvas.height * zoomFactor) + 'px';
       resolve();
     };
     img.onerror = () => resolve();
@@ -211,11 +230,10 @@ function drawCanvasWithOverlay(canvas, url, metadata) {
         ctx.lineWidth = 1;
         ctx.strokeRect(xb + 0.5, yb + 0.5, xe - xb, ye - yb);
       }
-      // CSS display: 1 canvas pixel = 1 CSS pixel
-      canvas.style.width = canvas.width + 'px';
-      canvas.style.height = canvas.height + 'px';
-      compContainer.style.width = canvas.width + 'px';
-      compContainer.style.height = canvas.height + 'px';
+      // CSS display: 1 canvas pixel = 1 CSS pixel (with zoom)
+      applyZoom(canvas);
+      compContainer.style.width = (canvas.width * zoomFactor) + 'px';
+      compContainer.style.height = (canvas.height * zoomFactor) + 'px';
       resolve();
     };
     img.onerror = () => resolve();
@@ -267,7 +285,7 @@ function updateSourceUI() {
 function clearOrigPreview() {
   const ctx = origCanvas.getContext('2d');
   ctx.clearRect(0, 0, origCanvas.width, origCanvas.height);
-  origCanvas.style.width = '1px'; origCanvas.style.height = '1px';
+  origCanvas.style.width = '0px'; origCanvas.style.height = '0px';
 }
 
 // ---- Handle file upload: instant preview via createObjectURL ----
@@ -289,7 +307,7 @@ function handleFileSelect(file) {
 function clearReconPreview() {
   const ctx = reconCanvas.getContext('2d');
   ctx.clearRect(0, 0, reconCanvas.width, reconCanvas.height);
-  reconCanvas.style.width = '1px'; reconCanvas.style.height = '1px';
+  reconCanvas.style.width = '0px'; reconCanvas.style.height = '0px';
 }
 
 function clearResults() {
@@ -297,7 +315,7 @@ function clearResults() {
   compInfo.textContent = '';
   const ctx = compCanvas.getContext('2d');
   ctx.clearRect(0, 0, compCanvas.width, compCanvas.height);
-  compCanvas.style.width = '1px'; compCanvas.style.height = '1px';
+  compCanvas.style.width = '0px'; compCanvas.style.height = '0px';
 }
 
 // ---- Handle sample select: instant preview from cached blob ----
@@ -318,29 +336,26 @@ function handleSampleSelect(name) {
   clearResults();
 }
 
-// ---- Draw compressed canvas: upscaled to original dimensions with point sampling ----
-function drawCompressedUpscaled(canvas, url, metadata) {
+// ---- Draw compressed canvas: at compressed image natural size with nine-patch overlay ----
+function drawCompressed(canvas, url, metadata) {
   return new Promise(resolve => {
     const img = new Image();
     img.onload = () => {
-      // Render at original dimensions (not compressed dimensions)
-      const origW = metadata.original_w;
-      const origH = metadata.original_h;
-      canvas.width = origW;
-      canvas.height = origH;
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
       const ctx = canvas.getContext('2d');
-      ctx.imageSmoothingEnabled = false; // point/nearest sampling
-      ctx.clearRect(0, 0, origW, origH);
-      ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, 0, 0, origW, origH);
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
       if (metadata) {
+        const sx = img.naturalWidth / metadata.original_w;
+        const sy = img.naturalHeight / metadata.original_h;
         const {xb, xe, yb, ye} = metadata;
         ctx.strokeStyle = 'rgba(255,0,0,0.8)';
         ctx.lineWidth = 1;
-        ctx.strokeRect(xb + 0.5, yb + 0.5, xe - xb, ye - yb);
+        ctx.strokeRect(xb * sx + 0.5, yb * sy + 0.5, (xe - xb) * sx, (ye - yb) * sy);
       }
-      // CSS display: 1 canvas pixel = 1 CSS pixel
-      canvas.style.width = canvas.width + 'px';
-      canvas.style.height = canvas.height + 'px';
+      applyZoom(canvas);
       resolve();
     };
     img.onerror = () => resolve();
@@ -391,7 +406,7 @@ async function runCompression() {
     // Compressed: draw upscaled to original dimensions with point sampling
     const compBlob = b64toBlob(data.compressed_png);
     const compUrl = URL.createObjectURL(compBlob);
-    await drawCompressedUpscaled(compCanvas, compUrl, data.metadata);
+    await drawCompressed(compCanvas, compUrl, data.metadata);
 
     // Info
     const m = data.metadata;
@@ -427,6 +442,23 @@ function updateSlider(pct) {
   reconCanvas.style.clipPath = `inset(0 ${100 - sliderPercent}% 0 0)`;
   compDivider.style.left = sliderPercent + '%';
 }
+
+// ---- Re-apply zoom to all visible canvases ----
+function reapplyZoom() {
+  if (origCanvas.width > 0) applyZoom(origCanvas);
+  if (reconCanvas.width > 0) applyZoom(reconCanvas);
+  if (origCanvas.width > 0) {
+    compContainer.style.width = (origCanvas.width * zoomFactor) + 'px';
+    compContainer.style.height = (origCanvas.height * zoomFactor) + 'px';
+  }
+  if (compCanvas.width > 0) applyZoom(compCanvas);
+  updateSlider(50);
+}
+
+$('zoomSelect').addEventListener('change', () => {
+  zoomFactor = parseInt($('zoomSelect').value, 10);
+  reapplyZoom();
+});
 
 compDivider.addEventListener('mousedown', e => { isDragging = true; e.preventDefault(); });
 document.addEventListener('mousemove', e => {
