@@ -34,6 +34,22 @@ class NinePatchMeta:
     error_2d: float
     savings_pct: float
 
+    def comp_xb(self) -> int:
+        """X begin of stretch region in compressed image."""
+        return self.xb
+
+    def comp_xe(self) -> int:
+        """X end of stretch region in compressed image."""
+        return self.xb + self.nx
+
+    def comp_yb(self) -> int:
+        """Y begin of stretch region in compressed image."""
+        return self.yb
+
+    def comp_ye(self) -> int:
+        """Y end of stretch region in compressed image."""
+        return self.yb + self.ny
+
 
 @dataclass
 class CompressResult:

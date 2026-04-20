@@ -69,6 +69,8 @@ def compress():
         'reconstructed_png': _img_to_base64(result['reconstructed_u8']),
         'metadata': {
             'xb': m.xb, 'xe': m.xe, 'yb': m.yb, 'ye': m.ye,
+            'comp_xb': m.comp_xb(), 'comp_xe': m.comp_xe(),
+            'comp_yb': m.comp_yb(), 'comp_ye': m.comp_ye(),
             'original_w': m.original_w, 'original_h': m.original_h,
             'compressed_w': m.compressed_w, 'compressed_h': m.compressed_h,
             'nx': m.nx, 'ny': m.ny,
