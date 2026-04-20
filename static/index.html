@@ -39,8 +39,11 @@
       position: absolute; top: 0; left: 0; display: block;
       image-rendering: pixelated;
     }
+    .comparison-container canvas.orig-canvas {
+      clip-path: inset(0 50% 0 0); /* default: show left half (original) */
+    }
     .comparison-container canvas.recon-canvas {
-      clip-path: inset(0 50% 0 0); /* default: show left half */
+      clip-path: inset(0 0 0 50%); /* default: show right half (reconstructed) */
     }
     .comp-label {
       position: absolute; top: 8px; font-size: 12px; font-weight: 600;
@@ -106,6 +109,8 @@
 
     .comp-canvas-wrapper {
       position: relative; display: inline-block;
+      background: repeating-conic-gradient(#888 0% 25%, #ccc 0% 50%) 0 0 / 16px 16px;
+      border-radius: 4px;
     }
     .comp-canvas-wrapper canvas { display: block; }
   </style>
@@ -157,7 +162,7 @@
   <!-- Comparison slider: Original vs Reconstructed -->
   <div class="comparison-wrapper">
     <div class="comparison-container" id="compContainer">
-      <canvas id="origCanvas"></canvas>
+      <canvas id="origCanvas" class="orig-canvas"></canvas>
       <canvas id="reconCanvas" class="recon-canvas"></canvas>
       <span class="comp-label left-label">Original</span>
       <span class="comp-label right-label">Reconstructed</span>
@@ -490,7 +495,8 @@ function b64toBlob(b64) {
 // ---- Comparison slider logic ----
 function updateSlider(pct) {
   sliderPercent = Math.max(0, Math.min(100, pct));
-  reconCanvas.style.clipPath = `inset(0 ${100 - sliderPercent}% 0 0)`;
+  origCanvas.style.clipPath = `inset(0 ${100 - sliderPercent}% 0 0)`;
+  reconCanvas.style.clipPath = `inset(0 0 0 ${sliderPercent}%)`;
   compDivider.style.left = sliderPercent + '%';
 }
 
