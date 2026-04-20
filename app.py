@@ -41,8 +41,9 @@ def get_sample_png(name):
 
 @app.route('/api/compress', methods=['POST'])
 def compress():
-    threshold = float(request.form.get('threshold', '4.0'))
-    margin = int(request.form.get('margin', '0'))
+    threshold = float(request.form.get('error_threshold', '4.0'))
+    margin = int(request.form.get('min_corner', '0'))
+    min_savings = float(request.form.get('min_savings', '30.0'))
 
     # Get source image
     if 'file' in request.files:
@@ -53,7 +54,7 @@ def compress():
     else:
         return jsonify({'status': 'error', 'reason': 'No file or sample provided'}), 400
 
-    result = run_full_pipeline(img_u8, threshold=threshold, margin=margin)
+    result = run_full_pipeline(img_u8, threshold=threshold, margin=margin, min_savings=min_savings)
 
     if result is None:
         return jsonify({
