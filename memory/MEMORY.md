@@ -1,3 +1,4 @@
 # Memory Index
 
-- [cs-rewrite 进度和已知 bug](project_cs_rewrite_progress.md) — .NET 重写进度(~35/61)，Compress2D/BoundaryError 在非均匀图像上的已知 bug
+- [WASM 构建决策和坑](feedback_wasm_gotchas.md) — .NET 10 browser-wasm AOT 构建注意事项、JSExport 语法、JsonSerializer 禁用
+- [Web Demo 计划 (Tasks 10-11)](project_web_demo_plan.md) — Vite+React+UnoCSS Web 演示，组件列表和 WASM 集成

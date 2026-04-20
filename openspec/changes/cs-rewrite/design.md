@@ -3,7 +3,7 @@
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                      NinePatch.Core                              │
-│  (.NET Standard 2.1 / .NET 8, no IO dependencies)               │
+│  (.NET 10, no IO dependencies)                                  │
 │                                                                  │
 │  • ColorSpace: sRGB ↔ Linear conversion (LUT/polynomial)        │
 │  • Resampler: Box downsampling + bilinear upsampling            │
@@ -184,24 +184,9 @@ F:\interesting\ninepatch_compress\
 │   └── tests/
 ├── src/
 │   ├── NinePatch.Core/
-│   │   ├── ColorSpace.cs
-│   │   ├── Resampler.cs
-│   │   ├── ErrorMetric.cs
-│   │   ├── Search1D.cs
-│   │   ├── Compressor.cs
-│   │   ├── NinePatchMeta.cs
-│   │   └── NinePatchCompressor.cs
 │   ├── NinePatch.CLI/
-│   │   ├── Program.cs
-│   │   └── NinePatch.CLI.csproj
-│   └── NinePatch.Wasm/
-│       ├── WasmExports.cs
-│       └── NinePatch.Wasm.csproj
-├── web/
-│   ├── src/
-│   ├── public/
-│   ├── package.json
-│   └── vite.config.ts
+│   ├── NinePatch.Wasm/
+│   └── NinePatch.Web/          # Web Demo (Vite + React + UnoCSS)
 ├── NinePatch.sln
 ├── CLAUDE.md
 └── openspec/
@@ -213,7 +198,7 @@ F:\interesting\ninepatch_compress\
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
@@ -242,8 +227,11 @@ F:\interesting\ninepatch_compress\
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
-    <PublishAot>true</PublishAot>
+    <!-- Note: NativeAOT is NOT used for browser-wasm.
+         .NET 10 browser-wasm uses its own AOT pipeline. -->
     <WasmEnableSIMD>true</WasmEnableSIMD>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\NinePatch.Core\NinePatch.Core.csproj" />
@@ -259,19 +247,25 @@ F:\interesting\ninepatch_compress\
 │                                                                 │
 │  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────┐   │
 │  │ ImageUpload │  │ PreviewPane │  │ NinePatchOverlay     │   │
-│  │             │  │             │  │ (SVG grid lines)     │   │
+│  │ (drag-drop) │  │ (image +    │  │ (SVG grid lines)     │   │
+│  │             │  │  blob URL)  │  │                      │   │
 │  └─────────────┘  └─────────────┘  └──────────────────────┘   │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │ Controller                                              │   │
+│  │ useCompressor hook                                      │   │
 │  │ • loadImage(file) → ImageData → Uint8Array             │   │
-│  │ • call WASM: Module.Compress(...)                      │   │
-│  │ • render(compressed, meta)                              │   │
+│  │ • loadWasm() → dotnet.create() + getAssemblyExports()  │   │
+│  │ • compress() → WasmExports.Compress(...)               │   │
 │  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌───────────────────┐  ┌───────────────────┐                 │
+│  │ ParameterControls │  │ MetadataDisplay   │                 │
+│  │ (sliders)         │  │ + Download btn    │                 │
+│  └───────────────────┘  └───────────────────┘                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 **Key Points**:
 - PNG decoding uses `createImageBitmap()` + `CanvasRenderingContext2D.getImageData()`
-- WASM loading uses `import init from './ninepatch.wasm'` + `Module.Compress(...)`
+- WASM loading uses `dotnet.withDiagnosticTracing(false).create()` + `getAssemblyExports()` (.NET 10 browser-wasm JSExport)
 - Nine-patch overlay uses SVG dashed grid lines
