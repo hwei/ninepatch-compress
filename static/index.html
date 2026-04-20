@@ -1,239 +1,473 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nine-Patch Compressor</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; }
-  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-  h1 { text-align: center; margin-bottom: 20px; color: #a0c4ff; font-size: 1.5em; }
+  <meta charset="UTF-8">
+  <title>Nine-Patch Auto-Compress</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0e27; color: #ddd; font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; }
+    h1 { font-size: 24px; margin-bottom: 16px; }
 
-  /* Controls */
-  .controls { background: #16213e; border-radius: 8px; padding: 16px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
-  .control-group { display: flex; flex-direction: column; gap: 4px; }
-  .control-group label { font-size: 0.85em; color: #888; }
-  .control-group input[type=range] { width: 150px; }
-  .control-group .value { font-size: 0.85em; color: #a0c4ff; }
-  select, input[type=file] { background: #0f3460; color: #e0e0e0; border: 1px solid #334; border-radius: 4px; padding: 6px 10px; font-size: 0.9em; }
-  button { background: #e94560; color: white; border: none; border-radius: 4px; padding: 8px 24px; font-size: 1em; cursor: pointer; }
-  button:hover { background: #c73050; }
-  button:disabled { background: #555; cursor: not-allowed; }
+    .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+    select, input[type=file], button, input[type=number] {
+      background: #1a1f3a; color: #ddd; border: 1px solid #334;
+      border-radius: 4px; padding: 6px 10px; font-size: 14px;
+    }
+    button { cursor: pointer; background: #3a6df0; border: none; }
+    button:hover { background: #5085f5; }
+    button:disabled { opacity: 0.4; cursor: default; }
 
-  /* Canvases */
-  .canvas-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
-  .canvas-card { background: #16213e; border-radius: 8px; padding: 12px; text-align: center; }
-  .canvas-card h3 { font-size: 0.9em; color: #a0c4ff; margin-bottom: 8px; }
-  .canvas-card .dim { font-size: 0.8em; color: #666; margin-bottom: 6px; }
-  .canvas-card canvas { border: 1px solid #334; border-radius: 4px; image-rendering: pixelated; max-width: 100%; }
+    .bg-buttons { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
+    .bg-buttons span { font-size: 13px; margin-right: 4px; }
+    .bg-btn { padding: 4px 10px; font-size: 12px; border: 1px solid #555; border-radius: 3px; cursor: pointer; }
+    .bg-btn.active { border-color: #3a6df0; box-shadow: 0 0 4px #3a6df0; }
+    .bg-btn.b-black { background: #000; }
+    .bg-btn.b-white { background: #fff; color: #000; }
+    .bg-btn.b-checker { background: repeating-conic-gradient(#888 0% 25%, #ccc 0% 50%) 0 0 / 12px 12px; }
 
-  /* Results */
-  .results { background: #16213e; border-radius: 8px; padding: 16px; display: none; }
-  .results.visible { display: block; }
-  .results table { width: 100%; border-collapse: collapse; }
-  .results td { padding: 4px 8px; font-size: 0.9em; }
-  .results td:first-child { color: #888; }
-  .results td:last-child { color: #a0c4ff; font-family: monospace; }
+    /* Comparison slider area */
+    .comparison-wrapper { display: flex; justify-content: center; margin-bottom: 16px; }
+    .comparison-container {
+      position: relative;
+      border-radius: 8px; overflow: hidden;
+      background: repeating-conic-gradient(#888 0% 25%, #ccc 0% 50%) 0 0 / 16px 16px;
+    }
+    .comparison-container.bg-black { background: #000; }
+    .comparison-container.bg-white { background: #fff; }
+    .comparison-container.bg-checker { background: repeating-conic-gradient(#888 0% 25%, #ccc 0% 50%) 0 0 / 16px 16px; }
+    .comparison-container canvas {
+      position: absolute; top: 0; left: 0; display: block;
+      image-rendering: pixelated;
+    }
+    .comparison-container canvas.recon-canvas {
+      clip-path: inset(0 50% 0 0); /* default: show left half */
+    }
+    .comp-label {
+      position: absolute; top: 8px; font-size: 12px; font-weight: 600;
+      padding: 2px 8px; border-radius: 3px; background: rgba(0,0,0,0.6);
+      pointer-events: none; z-index: 3;
+    }
+    .comp-label.left-label { left: 8px; }
+    .comp-label.right-label { right: 8px; }
 
-  /* Status banner */
-  .banner { padding: 12px 16px; border-radius: 8px; margin-bottom: 12px; font-size: 0.95em; display: none; }
-  .banner.ok { display: block; background: #1a3a2a; border: 1px solid #2d6a4f; color: #95d5b2; }
-  .banner.skip { display: block; background: #3a2a1a; border: 1px solid #6a4f2d; color: #d5b295; }
-  .banner.error { display: block; background: #3a1a1a; border: 1px solid #6a2d2d; color: #d59595; }
+    /* Draggable divider */
+    .comp-divider {
+      position: absolute; top: 0; left: 50%; width: 4px; height: 100%;
+      background: #fff; z-index: 4; cursor: ew-resize;
+      box-shadow: 0 0 6px rgba(0,0,0,0.5);
+    }
+    .comp-divider::after {
+      content: '\2194'; position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%); background: #fff; color: #333;
+      width: 28px; height: 28px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: bold;
+    }
 
-  .error-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; }
-  .error-badge.good { background: #2d6a4f; color: #95d5b2; }
-  .error-badge.bad { background: #6a4f2d; color: #d5b295; }
+    /* Compressed image row */
+    .compressed-row {
+      display: flex; flex-direction: column; align-items: center;
+      margin-bottom: 16px;
+    }
+    .compressed-row h3 { font-size: 16px; margin-bottom: 8px; }
+    .compressed-row canvas {
+      border: 1px solid #334; border-radius: 4px;
+      image-rendering: pixelated;
+    }
+    .compressed-info { font-size: 13px; color: #999; margin-top: 4px; }
 
-  .spinner { display: none; text-align: center; padding: 20px; color: #a0c4ff; }
-  .spinner.visible { display: block; }
-</style>
+    /* Results table */
+    .results { font-size: 14px; line-height: 1.8; text-align: center; }
+    .results table { border-collapse: collapse; margin: 0 auto; }
+    .results td { padding: 4px 16px 4px 4px; border-bottom: 1px solid #222; }
+    .results td:first-child { color: #aaa; }
+    .results td:last-child { font-weight: 600; }
+
+    .status { display: none; padding: 8px 12px; border-radius: 4px; margin-bottom: 12px; font-size: 14px; }
+    .status.error { display: block; background: #4a1525; color: #f88; }
+    .status.success { display: block; background: #153a1a; color: #8f8; }
+    .status.info { display: block; background: #1a2a4a; color: #8af; }
+
+    .dim-text { font-size: 12px; color: #777; margin-top: 2px; }
+  </style>
 </head>
 <body>
-<div class="container">
-  <h1>Nine-Patch Auto-Compressor</h1>
+  <h1>Nine-Patch Auto-Compress</h1>
 
-  <!-- Controls -->
   <div class="controls">
-    <div class="control-group">
-      <label>Source</label>
-      <select id="sourceType">
-        <option value="sample">Sample Image</option>
+    <label>Source:
+      <select id="sourceSelect">
         <option value="upload">Upload PNG</option>
+        <option value="samples">Sample...</option>
       </select>
-    </div>
-    <div class="control-group" id="sampleGroup">
-      <label>Sample</label>
-      <select id="sampleSelect"></select>
-    </div>
-    <div class="control-group" id="uploadGroup" style="display:none">
-      <label>File</label>
-      <input type="file" id="fileInput" accept="image/png">
-    </div>
-    <div class="control-group">
-      <label>Threshold: <span class="value" id="thresholdVal">4.0</span></label>
-      <input type="range" id="threshold" min="0.5" max="16" step="0.5" value="4">
-    </div>
-    <div class="control-group">
-      <label>Margin: <span class="value" id="marginVal">0</span></label>
-      <input type="range" id="margin" min="0" max="16" step="1" value="0">
-    </div>
-    <button id="runBtn">Run</button>
+    </label>
+    <select id="sampleSelect" style="display:none;"></select>
+    <input type="file" id="fileInput" accept="image/png" style="display:none;">
+    <label>Error Threshold:
+      <input type="number" id="thresholdInput" value="4" min="1" max="50" step="1" style="width:60px;">
+    </label>
+    <label>Min Savings %:
+      <input type="number" id="minSavingsInput" value="30" min="0" max="100" step="5" style="width:60px;">
+    </label>
+    <label>Min Corner:
+      <input type="number" id="minCornerInput" value="0" min="0" max="50" step="1" style="width:60px;">
+    </label>
+    <button id="runBtn" disabled>Run Compression</button>
   </div>
 
-  <!-- Status -->
-  <div class="banner" id="banner"></div>
-  <div class="spinner" id="spinner">Processing...</div>
+  <div id="status" class="status"></div>
 
-  <!-- Canvases -->
-  <div class="canvas-row">
-    <div class="canvas-card">
-      <h3>Original</h3>
-      <div class="dim" id="origDim">-</div>
+  <!-- Background switcher -->
+  <div class="bg-buttons">
+    <span>Background:</span>
+    <button class="bg-btn b-checker active" data-bg="checker" title="Checkerboard">&#x25f0;</button>
+    <button class="bg-btn b-black" data-bg="black" title="Black background"></button>
+    <button class="bg-btn b-white" data-bg="white" title="White background"></button>
+  </div>
+
+  <!-- Comparison slider: Original vs Reconstructed -->
+  <div class="comparison-wrapper">
+    <div class="comparison-container" id="compContainer">
       <canvas id="origCanvas"></canvas>
+      <canvas id="reconCanvas" class="recon-canvas"></canvas>
+      <span class="comp-label left-label">Original</span>
+      <span class="comp-label right-label">Reconstructed</span>
+      <div class="comp-divider" id="compDivider"></div>
     </div>
-    <div class="canvas-card">
-      <h3>Compressed</h3>
-      <div class="dim" id="compDim">-</div>
-      <canvas id="compCanvas"></canvas>
-    </div>
-    <div class="canvas-card">
-      <h3>Reconstructed</h3>
-      <div class="dim" id="reconDim">-</div>
-      <canvas id="reconCanvas"></canvas>
-    </div>
+  </div>
+
+  <!-- Compressed image -->
+  <div class="compressed-row">
+    <h3>Compressed</h3>
+    <canvas id="compCanvas"></canvas>
+    <div class="compressed-info" id="compInfo"></div>
   </div>
 
   <!-- Results -->
-  <div class="results" id="results">
-    <table>
-      <tr><td>Nine-Patch Region</td><td id="rRegion">-</td></tr>
-      <tr><td>Compressed Size</td><td id="rSize">-</td></tr>
-      <tr><td>Savings</td><td id="rSavings">-</td></tr>
-      <tr><td>error_x / error_y</td><td id="rErrXY">-</td></tr>
-      <tr><td>error_2d (reconstruction)</td><td id="rErr2D">-</td></tr>
-    </table>
-  </div>
-</div>
+  <div class="results" id="results" style="display:none;"></div>
 
 <script>
 const $ = id => document.getElementById(id);
+const sourceSelect = $('sourceSelect');
+const sampleSelect = $('sampleSelect');
+const fileInput = $('fileInput');
+const runBtn = $('runBtn');
+const thresholdInput = $('thresholdInput');
+const minSavingsInput = $('minSavingsInput');
+const minCornerInput = $('minCornerInput');
+const statusEl = $('status');
+const origCanvas = $('origCanvas');
+const reconCanvas = $('reconCanvas');
+const compCanvas = $('compCanvas');
+const compContainer = $('compContainer');
+const compDivider = $('compDivider');
+const compInfo = $('compInfo');
+const resultsEl = $('results');
 
-// Slider value displays
-$('threshold').oninput = () => $('thresholdVal').textContent = parseFloat($('threshold').value).toFixed(1);
-$('margin').oninput = () => $('marginVal').textContent = $('margin').value;
+let currentFile = null;
+let currentSample = null;
+let origBlobUrl = null;
+let reconBlobUrl = null;
+let sampleBlobUrls = {};
+let sliderPercent = 50;
+let isDragging = false;
 
-// Source type toggle
-$('sourceType').onchange = () => {
-  const isUpload = $('sourceType').value === 'upload';
-  $('sampleGroup').style.display = isUpload ? 'none' : '';
-  $('uploadGroup').style.display = isUpload ? '' : 'none';
-};
-
-// Load sample list
-fetch('/api/samples')
-  .then(r => r.json())
-  .then(names => {
-    names.forEach(n => {
-      const opt = document.createElement('option');
-      opt.value = n; opt.textContent = n;
-      $('sampleSelect').appendChild(opt);
-    });
+// ---- Draw canvas from blob URL, proportionally scaled ----
+function drawCanvasFromUrl(canvas, url) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      // CSS display: 1 canvas pixel = 1 CSS pixel
+      canvas.style.width = canvas.width + 'px';
+      canvas.style.height = canvas.height + 'px';
+      compContainer.style.width = canvas.width + 'px';
+      compContainer.style.height = canvas.height + 'px';
+      resolve();
+    };
+    img.onerror = () => resolve();
+    img.src = url;
   });
-
-// Draw image on canvas with nine-patch overlay
-function drawCanvas(canvas, base64Png, overlay) {
-  const img = new Image();
-  img.onload = () => {
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    if (overlay) {
-      ctx.strokeStyle = 'rgba(255, 50, 50, 0.7)';
-      ctx.lineWidth = 1;
-      const {xb, xe, yb, ye} = overlay;
-      ctx.strokeRect(xb, yb, xe - xb, ye - yb);
-      // Cross lines
-      ctx.beginPath();
-      ctx.moveTo(xb, 0); ctx.lineTo(xb, img.height);
-      ctx.moveTo(xe, 0); ctx.lineTo(xe, img.height);
-      ctx.moveTo(0, yb); ctx.lineTo(img.width, yb);
-      ctx.moveTo(0, ye); ctx.lineTo(img.width, ye);
-      ctx.stroke();
-    }
-  };
-  img.src = 'data:image/png;base64,' + base64Png;
 }
 
-// Run compression
-$('runBtn').onclick = async () => {
-  const btn = $('runBtn');
-  btn.disabled = true;
-  $('spinner').classList.add('visible');
-  $('banner').className = 'banner';
-  $('results').classList.remove('visible');
+// ---- Draw canvas with nine-patch overlay, proportionally scaled ----
+function drawCanvasWithOverlay(canvas, url, metadata) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false; // point sampling for pixel-perfect
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      if (metadata) {
+        const {xb, xe, yb, ye} = metadata;
+        ctx.strokeStyle = 'rgba(255,0,0,0.8)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(xb + 0.5, yb + 0.5, xe - xb, ye - yb);
+      }
+      // CSS display: 1 canvas pixel = 1 CSS pixel
+      canvas.style.width = canvas.width + 'px';
+      canvas.style.height = canvas.height + 'px';
+      compContainer.style.width = canvas.width + 'px';
+      compContainer.style.height = canvas.height + 'px';
+      resolve();
+    };
+    img.onerror = () => resolve();
+    img.src = url;
+  });
+}
 
-  const form = new FormData();
-  form.append('threshold', $('threshold').value);
-  form.append('margin', $('margin').value);
+// ---- Status ----
+function setStatus(msg, type) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status ' + type;
+}
+function clearStatus() { statusEl.className = 'status'; statusEl.textContent = ''; }
 
-  if ($('sourceType').value === 'upload') {
-    const file = $('fileInput').files[0];
-    if (!file) { alert('Select a PNG file first'); btn.disabled = false; $('spinner').classList.remove('visible'); return; }
-    form.append('file', file);
-  } else {
-    form.append('sample', $('sampleSelect').value);
-  }
-
-  let resp;
+// ---- Load samples list & pre-load blobs ----
+async function initSamples() {
   try {
-    resp = await fetch('/api/compress', { method: 'POST', body: form });
+    const res = await fetch('/api/samples');
+    const names = await res.json();
+    for (const name of names) {
+      sampleSelect.appendChild(new Option(name, name));
+    }
+    // Pre-load all sample blobs for instant display
+    for (const name of names) {
+      try {
+        const r = await fetch('/api/sample/' + encodeURIComponent(name));
+        const blob = await r.blob();
+        sampleBlobUrls[name] = URL.createObjectURL(blob);
+      } catch (e) { /* skip */ }
+    }
   } catch (e) {
-    $('banner').textContent = 'Error: ' + e.message;
-    $('banner').className = 'banner error';
-    btn.disabled = false; $('spinner').classList.remove('visible'); return;
+    setStatus('Failed to load samples: ' + e.message, 'error');
   }
+}
 
-  const data = await resp.json();
-  btn.disabled = false;
-  $('spinner').classList.remove('visible');
+// ---- Update source-dependent UI ----
+function updateSourceUI() {
+  const v = sourceSelect.value;
+  sampleSelect.style.display = v === 'samples' ? '' : 'none';
+  fileInput.style.display = v === 'upload' ? '' : 'none';
+  runBtn.disabled = true;
+  clearOrigPreview();
+  // If switching to samples, auto-load the currently selected sample
+  if (v === 'samples' && sampleSelect.value) {
+    handleSampleSelect(sampleSelect.value);
+  }
+}
 
-  if (data.status === 'ok') {
-    // Original canvas (no overlay)
-    drawCanvas($('origCanvas'), data.original_png, null);
-    // Compressed canvas (with overlay)
-    drawCanvas($('compCanvas'), data.compressed_png, data.metadata);
-    // Reconstructed canvas (with overlay)
-    drawCanvas($('reconCanvas'), data.reconstructed_png, data.metadata);
+function clearOrigPreview() {
+  const ctx = origCanvas.getContext('2d');
+  ctx.clearRect(0, 0, origCanvas.width, origCanvas.height);
+  origCanvas.style.width = '1px'; origCanvas.style.height = '1px';
+}
 
-    $('origDim').textContent = `${data.metadata.original_w} x ${data.metadata.original_h}`;
-    $('compDim').textContent = `${data.metadata.compressed_w} x ${data.metadata.compressed_h}`;
-    $('reconDim').textContent = `${data.metadata.original_w} x ${data.metadata.original_h}`;
+// ---- Handle file upload: instant preview via createObjectURL ----
+function handleFileSelect(file) {
+  if (!file) return;
+  currentFile = file;
+  currentSample = null;
+  if (origBlobUrl) URL.revokeObjectURL(origBlobUrl);
+  origBlobUrl = URL.createObjectURL(file);
+  drawCanvasFromUrl(origCanvas, origBlobUrl).then(() => {
+    runBtn.disabled = false;
+  });
+  // Clear recon
+  reconBlobUrl = null;
+  clearReconPreview();
+  clearResults();
+}
 
-    const m = data.metadata;
-    $('rRegion').textContent = `xb=${m.xb} xe=${m.xe} yb=${m.yb} ye=${m.ye}`;
-    $('rSize').textContent = `${m.compressed_w} x ${m.compressed_h} (${m.nx}+${m.xb}+${m.original_w-m.xe} / ${m.ny}+${m.yb}+${m.original_h-m.ye})`;
-    $('rSavings').textContent = `${data.savings_pct}%`;
+function clearReconPreview() {
+  const ctx = reconCanvas.getContext('2d');
+  ctx.clearRect(0, 0, reconCanvas.width, reconCanvas.height);
+  reconCanvas.style.width = '1px'; reconCanvas.style.height = '1px';
+}
 
-    const badge2d = data.error_2d <= parseFloat($('threshold').value)
-      ? '<span class="error-badge good">PASS</span>'
-      : '<span class="error-badge bad">FAIL</span>';
-    $('rErrXY').textContent = `x=${data.error_x}, y=${data.error_y}`;
-    $('rErr2D').innerHTML = `${data.error_2d} ${badge2d}`;
+function clearResults() {
+  resultsEl.style.display = 'none';
+  compInfo.textContent = '';
+  const ctx = compCanvas.getContext('2d');
+  ctx.clearRect(0, 0, compCanvas.width, compCanvas.height);
+  compCanvas.style.width = '1px'; compCanvas.style.height = '1px';
+}
 
-    $('banner').textContent = 'Compression successful';
-    $('banner').className = 'banner ok';
-    $('results').classList.add('visible');
-  } else if (data.status === 'skipped') {
-    $('banner').textContent = 'Skipped: ' + data.reason;
-    $('banner').className = 'banner skip';
+// ---- Handle sample select: instant preview from cached blob ----
+function handleSampleSelect(name) {
+  if (!name) return;
+  currentSample = name;
+  currentFile = null;
+  const url = sampleBlobUrls[name];
+  if (url) {
+    origBlobUrl = url;
+    drawCanvasFromUrl(origCanvas, url).then(() => {
+      runBtn.disabled = false;
+    });
+  }
+  // Clear recon
+  reconBlobUrl = null;
+  clearReconPreview();
+  clearResults();
+}
+
+// ---- Draw compressed canvas: upscaled to original dimensions with point sampling ----
+function drawCompressedUpscaled(canvas, url, metadata) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      // Render at original dimensions (not compressed dimensions)
+      const origW = metadata.original_w;
+      const origH = metadata.original_h;
+      canvas.width = origW;
+      canvas.height = origH;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false; // point/nearest sampling
+      ctx.clearRect(0, 0, origW, origH);
+      ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, 0, 0, origW, origH);
+      if (metadata) {
+        const {xb, xe, yb, ye} = metadata;
+        ctx.strokeStyle = 'rgba(255,0,0,0.8)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(xb + 0.5, yb + 0.5, xe - xb, ye - yb);
+      }
+      // CSS display: 1 canvas pixel = 1 CSS pixel
+      canvas.style.width = canvas.width + 'px';
+      canvas.style.height = canvas.height + 'px';
+      resolve();
+    };
+    img.onerror = () => resolve();
+    img.src = url;
+  });
+}
+// ---- Run compression ----
+async function runCompression() {
+  runBtn.disabled = true;
+  setStatus('Compressing...', 'info');
+  clearStatus();
+
+  const fd = new FormData();
+  fd.set('error_threshold', thresholdInput.value);
+  fd.set('min_savings', minSavingsInput.value);
+  fd.set('min_corner', minCornerInput.value);
+
+  if (currentFile) {
+    fd.set('file', currentFile);
+  } else if (currentSample) {
+    fd.set('sample', currentSample);
   } else {
-    $('banner').textContent = 'Error: ' + (data.reason || 'Unknown error');
-    $('banner').className = 'banner error';
+    setStatus('No source selected', 'error');
+    runBtn.disabled = false;
+    return;
   }
-};
+
+  try {
+    const res = await fetch('/api/compress', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) { setStatus(data.error || 'Server error', 'error'); runBtn.disabled = false; return; }
+    if (data.status === 'skipped') { setStatus(data.reason || 'Skipped', 'info'); runBtn.disabled = false; return; }
+    if (data.not_worth) { setStatus(data.message || 'Not worth compressing', 'info'); runBtn.disabled = false; return; }
+
+    // Original already shown via instant preview; just re-draw if needed
+    if (data.original_png && !origBlobUrl) {
+      // Fallback: shouldn't happen but just in case
+      const blob = b64toBlob(data.original_png);
+      origBlobUrl = URL.createObjectURL(blob);
+      await drawCanvasFromUrl(origCanvas, origBlobUrl);
+    }
+
+    // Reconstructed: draw with overlay on recon canvas (top layer of comparison)
+    const reconBlob = b64toBlob(data.reconstructed_png);
+    reconBlobUrl = URL.createObjectURL(reconBlob);
+    await drawCanvasWithOverlay(reconCanvas, reconBlobUrl, data.metadata);
+
+    // Compressed: draw upscaled to original dimensions with point sampling
+    const compBlob = b64toBlob(data.compressed_png);
+    const compUrl = URL.createObjectURL(compBlob);
+    await drawCompressedUpscaled(compCanvas, compUrl, data.metadata);
+
+    // Info
+    const m = data.metadata;
+    compInfo.textContent = `${m.compressed_w} x ${m.compressed_h} pixels`;
+
+    // Results table
+    resultsEl.style.display = 'block';
+    resultsEl.innerHTML = `<table>
+      <tr><td>Original</td><td>${m.original_w} x ${m.original_h}</td></tr>
+      <tr><td>Compressed</td><td>${m.compressed_w} x ${m.compressed_h}</td></tr>
+      <tr><td>Savings</td><td>${m.savings_pct.toFixed(1)}%</td></tr>
+      <tr><td>Nine-patch</td><td>(${m.xb}, ${m.yb}, ${m.xe - m.xb}, ${m.ye - m.yb})</td></tr>
+      <tr><td>Max error</td><td>${data.error_2d}</td></tr>
+    </table>`;
+
+    setStatus('Done!', 'success');
+  } catch (e) {
+    setStatus('Request failed: ' + e.message, 'error');
+  }
+  runBtn.disabled = false;
+}
+
+function b64toBlob(b64) {
+  const bytes = atob(b64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr], { type: 'image/png' });
+}
+
+// ---- Comparison slider logic ----
+function updateSlider(pct) {
+  sliderPercent = Math.max(0, Math.min(100, pct));
+  reconCanvas.style.clipPath = `inset(0 ${100 - sliderPercent}% 0 0)`;
+  compDivider.style.left = sliderPercent + '%';
+}
+
+compDivider.addEventListener('mousedown', e => { isDragging = true; e.preventDefault(); });
+document.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  const rect = compContainer.getBoundingClientRect();
+  const pct = ((e.clientX - rect.left) / rect.width) * 100;
+  updateSlider(pct);
+});
+document.addEventListener('mouseup', () => { isDragging = false; });
+
+// Touch support
+compDivider.addEventListener('touchstart', e => { isDragging = true; e.preventDefault(); });
+document.addEventListener('touchmove', e => {
+  if (!isDragging) return;
+  const touch = e.touches[0];
+  const rect = compContainer.getBoundingClientRect();
+  const pct = ((touch.clientX - rect.left) / rect.width) * 100;
+  updateSlider(pct);
+});
+document.addEventListener('touchend', () => { isDragging = false; });
+
+// ---- Background switcher ----
+document.querySelectorAll('.bg-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.bg-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    compContainer.className = 'comparison-container';
+    const bg = btn.dataset.bg;
+    if (bg !== 'checker') compContainer.classList.add('bg-' + bg);
+  });
+});
+
+// ---- Event listeners ----
+sourceSelect.addEventListener('change', updateSourceUI);
+fileInput.addEventListener('change', e => handleFileSelect(e.target.files[0]));
+sampleSelect.addEventListener('change', e => handleSampleSelect(e.target.value));
+runBtn.addEventListener('click', runCompression);
+
+// ---- Init ----
+initSamples();
+updateSourceUI();
 </script>
 </body>
 </html>
