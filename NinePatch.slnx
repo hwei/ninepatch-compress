@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NinePatch.CLI/NinePatch.CLI.csproj" />
+    <Project Path="src/NinePatch.Core/NinePatch.Core.csproj" />
+    <Project Path="src/NinePatch.Wasm/NinePatch.Wasm.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NinePatch.Tests/NinePatch.Tests.csproj" />
+  </Folder>
+</Solution>

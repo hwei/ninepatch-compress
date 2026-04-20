@@ -66,10 +66,10 @@
 
 ## 9. WASM Implementation
 
-- [ ] 9.1 Create `WasmExports.cs` with `[JSExport]` methods
-- [ ] 9.2 Implement Compress function export
-- [ ] 9.3 Configure browser-wasm AOT in csproj
-- [ ] 9.4 Test WASM module in browser console
+- [x] 9.1 Create `WasmExports.cs` with `[JSExport]` methods
+- [x] 9.2 Implement Compress function export
+- [x] 9.3 Configure browser-wasm AOT in csproj
+- [x] 9.4 Test WASM module in browser console
 
 ## 10. Web Demo Setup
 

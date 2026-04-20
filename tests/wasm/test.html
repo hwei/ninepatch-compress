@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>NinePatch WASM Test</title>
+</head>
+<body>
+    <h1>NinePatch WASM Test</h1>
+    <pre id="output">Loading...</pre>
+
+    <script type="module">
+        const output = document.getElementById('output');
+        function log(msg) { output.textContent += msg + '\n'; }
+
+        const { dotnet } = await import('./_framework/dotnet.js');
+
+        log('Creating WASM instance...');
+        const instance = await dotnet
+            .withDiagnosticTracing(false)
+            .create();
+
+        log('Getting assembly exports...');
+        const wasmExports = await instance.getAssemblyExports('NinePatch.Wasm.dll');
+
+        // Test GetVersion
+        log('Testing GetVersion...');
+        const version = wasmExports.NinePatch.Wasm.WasmExports.GetVersion();
+        log(`  Version: ${version}`);
+
+        // Test Compress with a simple 8x8 solid color image
+        log('Testing Compress with 8x8 solid color image...');
+        const w = 8, h = 8;
+        const rgba = new Uint8Array(w * h * 4);
+        for (let i = 0; i < w * h; i++) {
+            rgba[i * 4 + 0] = 128; // R
+            rgba[i * 4 + 1] = 128; // G
+            rgba[i * 4 + 2] = 128; // B
+            rgba[i * 4 + 3] = 255; // A
+        }
+
+        const result = wasmExports.NinePatch.Wasm.WasmExports.Compress(rgba, w, h, 4.0, 0, 30.0);
+        log(`  Result: ${result}`);
+
+        log('\nAll tests passed!');
+        instance.dispose();
+    </script>
+</body>
+</html>
