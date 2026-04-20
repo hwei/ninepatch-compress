@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nine-Patch Compressor</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  h1 { text-align: center; margin-bottom: 20px; color: #a0c4ff; font-size: 1.5em; }
+
+  /* Controls */
+  .controls { background: #16213e; border-radius: 8px; padding: 16px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+  .control-group { display: flex; flex-direction: column; gap: 4px; }
+  .control-group label { font-size: 0.85em; color: #888; }
+  .control-group input[type=range] { width: 150px; }
+  .control-group .value { font-size: 0.85em; color: #a0c4ff; }
+  select, input[type=file] { background: #0f3460; color: #e0e0e0; border: 1px solid #334; border-radius: 4px; padding: 6px 10px; font-size: 0.9em; }
+  button { background: #e94560; color: white; border: none; border-radius: 4px; padding: 8px 24px; font-size: 1em; cursor: pointer; }
+  button:hover { background: #c73050; }
+  button:disabled { background: #555; cursor: not-allowed; }
+
+  /* Canvases */
+  .canvas-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+  .canvas-card { background: #16213e; border-radius: 8px; padding: 12px; text-align: center; }
+  .canvas-card h3 { font-size: 0.9em; color: #a0c4ff; margin-bottom: 8px; }
+  .canvas-card .dim { font-size: 0.8em; color: #666; margin-bottom: 6px; }
+  .canvas-card canvas { border: 1px solid #334; border-radius: 4px; image-rendering: pixelated; max-width: 100%; }
+
+  /* Results */
+  .results { background: #16213e; border-radius: 8px; padding: 16px; display: none; }
+  .results.visible { display: block; }
+  .results table { width: 100%; border-collapse: collapse; }
+  .results td { padding: 4px 8px; font-size: 0.9em; }
+  .results td:first-child { color: #888; }
+  .results td:last-child { color: #a0c4ff; font-family: monospace; }
+
+  /* Status banner */
+  .banner { padding: 12px 16px; border-radius: 8px; margin-bottom: 12px; font-size: 0.95em; display: none; }
+  .banner.ok { display: block; background: #1a3a2a; border: 1px solid #2d6a4f; color: #95d5b2; }
+  .banner.skip { display: block; background: #3a2a1a; border: 1px solid #6a4f2d; color: #d5b295; }
+  .banner.error { display: block; background: #3a1a1a; border: 1px solid #6a2d2d; color: #d59595; }
+
+  .error-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; }
+  .error-badge.good { background: #2d6a4f; color: #95d5b2; }
+  .error-badge.bad { background: #6a4f2d; color: #d5b295; }
+
+  .spinner { display: none; text-align: center; padding: 20px; color: #a0c4ff; }
+  .spinner.visible { display: block; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Nine-Patch Auto-Compressor</h1>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="control-group">
+      <label>Source</label>
+      <select id="sourceType">
+        <option value="sample">Sample Image</option>
+        <option value="upload">Upload PNG</option>
+      </select>
+    </div>
+    <div class="control-group" id="sampleGroup">
+      <label>Sample</label>
+      <select id="sampleSelect"></select>
+    </div>
+    <div class="control-group" id="uploadGroup" style="display:none">
+      <label>File</label>
+      <input type="file" id="fileInput" accept="image/png">
+    </div>
+    <div class="control-group">
+      <label>Threshold: <span class="value" id="thresholdVal">4.0</span></label>
+      <input type="range" id="threshold" min="0.5" max="16" step="0.5" value="4">
+    </div>
+    <div class="control-group">
+      <label>Margin: <span class="value" id="marginVal">0</span></label>
+      <input type="range" id="margin" min="0" max="16" step="1" value="0">
+    </div>
+    <button id="runBtn">Run</button>
+  </div>
+
+  <!-- Status -->
+  <div class="banner" id="banner"></div>
+  <div class="spinner" id="spinner">Processing...</div>
+
+  <!-- Canvases -->
+  <div class="canvas-row">
+    <div class="canvas-card">
+      <h3>Original</h3>
+      <div class="dim" id="origDim">-</div>
+      <canvas id="origCanvas"></canvas>
+    </div>
+    <div class="canvas-card">
+      <h3>Compressed</h3>
+      <div class="dim" id="compDim">-</div>
+      <canvas id="compCanvas"></canvas>
+    </div>
+    <div class="canvas-card">
+      <h3>Reconstructed</h3>
+      <div class="dim" id="reconDim">-</div>
+      <canvas id="reconCanvas"></canvas>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="results" id="results">
+    <table>
+      <tr><td>Nine-Patch Region</td><td id="rRegion">-</td></tr>
+      <tr><td>Compressed Size</td><td id="rSize">-</td></tr>
+      <tr><td>Savings</td><td id="rSavings">-</td></tr>
+      <tr><td>error_x / error_y</td><td id="rErrXY">-</td></tr>
+      <tr><td>error_2d (reconstruction)</td><td id="rErr2D">-</td></tr>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Slider value displays
+$('threshold').oninput = () => $('thresholdVal').textContent = parseFloat($('threshold').value).toFixed(1);
+$('margin').oninput = () => $('marginVal').textContent = $('margin').value;
+
+// Source type toggle
+$('sourceType').onchange = () => {
+  const isUpload = $('sourceType').value === 'upload';
+  $('sampleGroup').style.display = isUpload ? 'none' : '';
+  $('uploadGroup').style.display = isUpload ? '' : 'none';
+};
+
+// Load sample list
+fetch('/api/samples')
+  .then(r => r.json())
+  .then(names => {
+    names.forEach(n => {
+      const opt = document.createElement('option');
+      opt.value = n; opt.textContent = n;
+      $('sampleSelect').appendChild(opt);
+    });
+  });
+
+// Draw image on canvas with nine-patch overlay
+function drawCanvas(canvas, base64Png, overlay) {
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    if (overlay) {
+      ctx.strokeStyle = 'rgba(255, 50, 50, 0.7)';
+      ctx.lineWidth = 1;
+      const {xb, xe, yb, ye} = overlay;
+      ctx.strokeRect(xb, yb, xe - xb, ye - yb);
+      // Cross lines
+      ctx.beginPath();
+      ctx.moveTo(xb, 0); ctx.lineTo(xb, img.height);
+      ctx.moveTo(xe, 0); ctx.lineTo(xe, img.height);
+      ctx.moveTo(0, yb); ctx.lineTo(img.width, yb);
+      ctx.moveTo(0, ye); ctx.lineTo(img.width, ye);
+      ctx.stroke();
+    }
+  };
+  img.src = 'data:image/png;base64,' + base64Png;
+}
+
+// Run compression
+$('runBtn').onclick = async () => {
+  const btn = $('runBtn');
+  btn.disabled = true;
+  $('spinner').classList.add('visible');
+  $('banner').className = 'banner';
+  $('results').classList.remove('visible');
+
+  const form = new FormData();
+  form.append('threshold', $('threshold').value);
+  form.append('margin', $('margin').value);
+
+  if ($('sourceType').value === 'upload') {
+    const file = $('fileInput').files[0];
+    if (!file) { alert('Select a PNG file first'); btn.disabled = false; $('spinner').classList.remove('visible'); return; }
+    form.append('file', file);
+  } else {
+    form.append('sample', $('sampleSelect').value);
+  }
+
+  let resp;
+  try {
+    resp = await fetch('/api/compress', { method: 'POST', body: form });
+  } catch (e) {
+    $('banner').textContent = 'Error: ' + e.message;
+    $('banner').className = 'banner error';
+    btn.disabled = false; $('spinner').classList.remove('visible'); return;
+  }
+
+  const data = await resp.json();
+  btn.disabled = false;
+  $('spinner').classList.remove('visible');
+
+  if (data.status === 'ok') {
+    // Original canvas (no overlay)
+    drawCanvas($('origCanvas'), data.original_png, null);
+    // Compressed canvas (with overlay)
+    drawCanvas($('compCanvas'), data.compressed_png, data.metadata);
+    // Reconstructed canvas (with overlay)
+    drawCanvas($('reconCanvas'), data.reconstructed_png, data.metadata);
+
+    $('origDim').textContent = `${data.metadata.original_w} x ${data.metadata.original_h}`;
+    $('compDim').textContent = `${data.metadata.compressed_w} x ${data.metadata.compressed_h}`;
+    $('reconDim').textContent = `${data.metadata.original_w} x ${data.metadata.original_h}`;
+
+    const m = data.metadata;
+    $('rRegion').textContent = `xb=${m.xb} xe=${m.xe} yb=${m.yb} ye=${m.ye}`;
+    $('rSize').textContent = `${m.compressed_w} x ${m.compressed_h} (${m.nx}+${m.xb}+${m.original_w-m.xe} / ${m.ny}+${m.yb}+${m.original_h-m.ye})`;
+    $('rSavings').textContent = `${data.savings_pct}%`;
+
+    const badge2d = data.error_2d <= parseFloat($('threshold').value)
+      ? '<span class="error-badge good">PASS</span>'
+      : '<span class="error-badge bad">FAIL</span>';
+    $('rErrXY').textContent = `x=${data.error_x}, y=${data.error_y}`;
+    $('rErr2D').innerHTML = `${data.error_2d} ${badge2d}`;
+
+    $('banner').textContent = 'Compression successful';
+    $('banner').className = 'banner ok';
+    $('results').classList.add('visible');
+  } else if (data.status === 'skipped') {
+    $('banner').textContent = 'Skipped: ' + data.reason;
+    $('banner').className = 'banner skip';
+  } else {
+    $('banner').textContent = 'Error: ' + (data.reason || 'Unknown error');
+    $('banner').className = 'banner error';
+  }
+};
+</script>
+</body>
+</html>
