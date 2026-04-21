@@ -43,6 +43,10 @@ The system SHALL compute maximum per-channel error in sRGB space, in [0,255] sca
 - **WHEN** alpha_weighted is true
 - **THEN** RGB error SHALL be multiplied by max(alpha_orig, alpha_recon)
 
+#### Scenario: Alpha error uses direct float difference
+- **WHEN** alpha values differ between original and reconstructed
+- **THEN** error SHALL be |a_orig - a_recon| * 255 (no round-first, alpha is linear)
+
 ### Requirement: 1D search finds minimal N
 The system SHALL binary-search for the smallest compressed size N that meets error threshold.
 
@@ -53,6 +57,21 @@ The system SHALL binary-search for the smallest compressed size N that meets err
 #### Scenario: No valid split
 - **WHEN** no valid split exists even after shrinking interval
 - **THEN** system returns null (search_1d) or CompressStatus.NoValidSplit (compress)
+
+#### Scenario: Shrink uses full compress-reconstruct error
+- **WHEN** binary search fails and interval needs shrinking
+- **THEN** system compares full 1D compress-reconstruct error on each side to decide shrink direction
+
+### Requirement: Auto-retry with increasing margin
+The system SHALL automatically retry with increasing margin when margin=0 fails.
+
+#### Scenario: Margin=0 fails, auto-retry succeeds
+- **WHEN** no valid split found with margin=0
+- **THEN** system retries with margin=4, 8, 12, ... up to min(W,H)/4
+
+#### Scenario: Explicit margin, no auto-retry
+- **WHEN** user specifies margin>0 and search fails
+- **THEN** system SHALL NOT auto-retry
 
 ### Requirement: 2D compression assembles regions correctly
 The system SHALL cut 9 regions, downsample stretch zones, and assemble compressed texture.

@@ -15,13 +15,13 @@ export interface NinePatchMeta {
   error_y: number;
   error_2d: number;
   savings_pct: number;
-  compressed_rgba_b64: string;
 }
 
 export interface CompressResult {
   status: number;
   message: string;
   metadata?: NinePatchMeta;
+  compressed_rgba_b64?: string;
 }
 
 export interface CompressParams {

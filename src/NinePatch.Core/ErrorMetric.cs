@@ -1,8 +1,12 @@
 namespace NinePatch.Core;
 
 /// <summary>
-/// Max per-channel error in sRGB space [0,255] scale.
-/// RGB error is alpha-weighted when alphaWeighted is true.
+/// Max per-channel error in sRGB space, [0,255] scale.
+/// RGB: convert linear→sRGB byte (uint8 level), take max absolute diff across R/G/B.
+/// Alpha: direct linear-float diff scaled to [0,255] (alpha is a blending coefficient,
+/// not a perceptual value — no round-first, just |a_orig - a_recon| * 255).
+/// When alphaWeighted, RGB error is multiplied by max(a_orig, a_recon) to suppress
+/// invisible pixels.
 /// </summary>
 public static class ErrorMetric
 {
@@ -23,22 +27,22 @@ public static class ErrorMetric
             float aOrig = Math.Clamp(original[i + 3], 0f, 1f);
             float aRecon = Math.Clamp(reconstructed[i + 3], 0f, 1f);
 
+            // RGB: linear→sRGB byte, integer-level absolute diff, max across channels
             float rgbErr = 0;
             for (int c = 0; c < 3; c++)
             {
-                float oSrgb = ColorSpace.LinearToSrgbByte(Math.Clamp(original[i + c], 0f, 1f));
-                float rSrgb = ColorSpace.LinearToSrgbByte(Math.Clamp(reconstructed[i + c], 0f, 1f));
+                byte oSrgb = ColorSpace.LinearToSrgbByte(Math.Clamp(original[i + c], 0f, 1f));
+                byte rSrgb = ColorSpace.LinearToSrgbByte(Math.Clamp(reconstructed[i + c], 0f, 1f));
                 float err = MathF.Abs(oSrgb - rSrgb);
                 if (err > rgbErr) rgbErr = err;
             }
 
             if (alphaWeighted)
-            {
-                float vis = MathF.Max(aOrig, aRecon);
-                rgbErr *= vis;
-            }
+                rgbErr *= MathF.Max(aOrig, aRecon);
 
-            float alphaErr = MathF.Abs(aOrig * 255f - aRecon * 255f);
+            // Alpha: direct float diff in [0,255] scale — no round-first
+            float alphaErr = MathF.Abs(aOrig - aRecon) * 255f;
+
             float pixelErr = MathF.Max(rgbErr, alphaErr);
             if (pixelErr > maxErr) maxErr = pixelErr;
         }

@@ -12,11 +12,11 @@ The system SHALL allow users to upload PNG/JPEG images via drag-drop or file pic
 - **THEN** system loads the image for processing
 
 ### Requirement: Web demo calls WASM compression
-The system SHALL invoke the WASM Compress function with user-adjustable parameters.
+The system SHALL invoke the WASM Compress function with user-adjustable parameters via a manual button click.
 
 #### Scenario: Compress with default parameters
-- **WHEN** image is loaded
-- **THEN** system automatically calls WASM Compress with default threshold, margin, minSavings
+- **WHEN** user clicks the compress button after loading an image
+- **THEN** system calls WASM Compress with current threshold, margin, minSavings values
 
 #### Scenario: Adjust parameters
 - **WHEN** user modifies threshold, margin, or minSavings sliders

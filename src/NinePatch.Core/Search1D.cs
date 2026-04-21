@@ -5,10 +5,10 @@ public readonly record struct SearchResult1D(int Begin, int End, int N);
 public static class Search1D
 {
     /// <summary>
-    /// Downsample strip[b..e] to n pixels, upsample back. Returns full-length reconstructed strip.
-    /// Data: (height, width, 4) interleaved RGBA float, row-major.
+    /// Downsample region [b..e] along axis to n pixels, upsample back.
+    /// Returns full-image-sized reconstructed array with unchanged pixels outside [b..e].
     /// </summary>
-    private static float[] Compress1D(float[] strip, int srcW, int srcH, int b, int e, int n, int axis)
+    private static float[] Compress1D(float[] img, int srcW, int srcH, int b, int e, int n, int axis)
     {
         int len = e - b;
         var dst = new float[srcW * srcH * 4];
@@ -22,7 +22,7 @@ public static class Search1D
             {
                 int si = (y * srcW + x) * 4;
                 int di = ((x - b) * srcH + y) * 4;
-                Buffer.BlockCopy(strip, si * 4, region, di * 4, 16);
+                Buffer.BlockCopy(img, si * 4, region, di * 4, 16);
             }
 
             // Downsample + upsample (axis=1 uses column-major-like indexing)
@@ -36,7 +36,7 @@ public static class Search1D
                 for (int x = 0; x < b; x++)
                 {
                     int si = (y * srcW + x) * 4;
-                    Buffer.BlockCopy(strip, si * 4, dst, si * 4, 16);
+                    Buffer.BlockCopy(img, si * 4, dst, si * 4, 16);
                 }
                 // Upsampled region — up output is column-major-like: (col * srcH + row) * 4
                 for (int x = 0; x < len; x++)
@@ -49,7 +49,7 @@ public static class Search1D
                 for (int x = e; x < srcW; x++)
                 {
                     int si = (y * srcW + x) * 4;
-                    Buffer.BlockCopy(strip, si * 4, dst, si * 4, 16);
+                    Buffer.BlockCopy(img, si * 4, dst, si * 4, 16);
                 }
             }
         }
@@ -62,7 +62,7 @@ public static class Search1D
             {
                 int si = (y * srcW + x) * 4;
                 int di = ((y - b) * srcW + x) * 4;
-                Buffer.BlockCopy(strip, si * 4, region, di * 4, 16);
+                Buffer.BlockCopy(img, si * 4, region, di * 4, 16);
             }
 
             float[] down = Resampler.Downsample1D(region, srcW, len, n, 0);
@@ -75,7 +75,7 @@ public static class Search1D
                 if (y < b || y >= e)
                 {
                     // Pad region: copy unchanged
-                    Buffer.BlockCopy(strip, di * 4, dst, di * 4, 16);
+                    Buffer.BlockCopy(img, di * 4, dst, di * 4, 16);
                 }
                 else
                 {
@@ -90,10 +90,10 @@ public static class Search1D
     }
 
     private static (float error, bool passes) TryN(
-        float[] strip, int srcW, int srcH, int b, int e, int n, float threshold, int axis)
+        float[] img, int srcW, int srcH, int b, int e, int n, float threshold, int axis)
     {
-        float[] recon = Compress1D(strip, srcW, srcH, b, e, n, axis);
-        float err = ErrorMetric.MaxError(strip, recon);
+        float[] recon = Compress1D(img, srcW, srcH, b, e, n, axis);
+        float err = ErrorMetric.MaxError(img, recon);
         return (err, err <= threshold);
     }
 
@@ -101,6 +101,9 @@ public static class Search1D
         ReadOnlySpan<float> img, int width, int height, int axis,
         float threshold, int margin = 0, int shrinkStep = 2)
     {
+        // Copy once — all TryN calls need a mutable array
+        float[] imgArr = img.ToArray();
+
         int l = axis == 1 ? width : height;
         int b = margin;
         int e = l - margin;
@@ -122,7 +125,7 @@ public static class Search1D
             while (loN <= hiN)
             {
                 int midN = (loN + hiN) / 2;
-                var (err, passes) = TryN(img.ToArray(), width, height, b, e, midN, threshold, axis);
+                var (err, passes) = TryN(imgArr, width, height, b, e, midN, threshold, axis);
                 if (passes)
                 {
                     foundN = midN;
@@ -140,8 +143,8 @@ public static class Search1D
             int bStep = Math.Min(shrinkStep, (e - b - 4) / 2);
             if (bStep < 1) break;
 
-            float errLeft = TryN(img.ToArray(), width, height, b + bStep, e, maxN, threshold, axis).error;
-            float errRight = TryN(img.ToArray(), width, height, b, e - bStep, maxN, threshold, axis).error;
+            float errLeft = TryN(imgArr, width, height, b + bStep, e, maxN, threshold, axis).error;
+            float errRight = TryN(imgArr, width, height, b, e - bStep, maxN, threshold, axis).error;
 
             if (errLeft < errRight)
                 b += bStep;

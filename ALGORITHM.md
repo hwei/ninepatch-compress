@@ -42,14 +42,12 @@ Edge clamping: when u < 0 or > srcW - 1, clamp to nearest valid index.
 Given linear RGBA buffer original O and reconstructed R, both shape (H, W, 4):
   O_srgb = srgb_encode(O[..., 0:3])   # uint8
   R_srgb = srgb_encode(R[..., 0:3])
-  O_a    = round(O[..., 3] * 255)
-  R_a    = round(R[..., 3] * 255)
-
   rgb_err_per_pixel = max over RGB channels of |O_srgb - R_srgb|
   if alpha_weighted:
     vis = max(O[..., 3], R[..., 3])   # still in [0, 1]
     rgb_err_per_pixel *= vis
-  alpha_err_per_pixel = |O_a - R_a|
+  alpha_err_per_pixel = |O_a - R_a| * 255
+  (alpha is a blending coefficient — use direct float diff, no round-first)
 
   pixel_err = max(rgb_err_per_pixel, alpha_err_per_pixel)
 
@@ -68,7 +66,8 @@ Pseudocode:
       N = binary_search_min_passing(xb, xe)
       if N found:
           return (xb, xe, N)
-      # shrink: sample which side contributes more error
+      # shrink: compare full compress-reconstruct error for each side
+      # (using same TryN function as binary search, at max_N)
       err_if_shrink_left  = try_compress(xb + step, xe, max_N).err
       err_if_shrink_right = try_compress(xb, xe - step, max_N).err
       if err_if_shrink_left < err_if_shrink_right:
@@ -85,6 +84,13 @@ Notes on the shrink heuristic:
   causes all the error (needs many shrink iterations). Consider: if shrink
   by `step` doesn't reduce error enough, double `step`.
 - Log every iteration for debugging.
+
+## Auto-retry with increasing margin
+
+When margin=0 and no valid split is found, the system automatically retries
+with increasing margin (step=4, maxMargin=min(W,H)/4). This helps find a
+split when boundary pixels cause noise that prevents margin=0 from succeeding.
+If the user explicitly specifies margin>0, no auto-retry is performed.
 
 ## Building the compressed texture
 

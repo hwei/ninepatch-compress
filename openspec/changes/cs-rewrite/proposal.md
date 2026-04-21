@@ -28,6 +28,5 @@ None. This is a complete rewrite; the original Python implementation will be rep
 - Delete `app.py`, `compress.py`, `color_space.py`, `error_metric.py`, `resample.py`, `search_1d.py`, `sample_gen.py`
 - Delete `static/` directory
 - Delete `tests/` directory (Python tests)
-- Create `src/NinePatch.Core/`, `src/NinePatch.CLI/`, `src/NinePatch.Wasm/`
-- Create `web/` directory
+- Create `src/NinePatch.Core/`, `src/NinePatch.CLI/`, `src/NinePatch.Wasm/`, `src/NinePatch.Web/`
 - Dependencies: System.Numerics.Tensors (SIMD), SixLabors.ImageSharp (CLI PNG)

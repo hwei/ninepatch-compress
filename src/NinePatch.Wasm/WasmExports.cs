@@ -53,9 +53,10 @@ public static partial class WasmExports
             sb.Append("\"error_x\":").Append(meta.ErrorX.ToString("G17")).Append(',');
             sb.Append("\"error_y\":").Append(meta.ErrorY.ToString("G17")).Append(',');
             sb.Append("\"error_2d\":").Append(meta.Error2d.ToString("G17")).Append(',');
-            sb.Append("\"savings_pct\":").Append(meta.SavingsPct.ToString("G17")).Append(',');
-            sb.Append("\"compressed_rgba_b64\":").Append(JsonString(Convert.ToBase64String(result.CompressedRgba!)));
+            sb.Append("\"savings_pct\":").Append(meta.SavingsPct.ToString("G17"));
             sb.Append('}');
+
+            sb.Append(",\"compressed_rgba_b64\":").Append(JsonString(Convert.ToBase64String(result.CompressedRgba!)));
         }
 
         sb.Append('}');

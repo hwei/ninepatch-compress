@@ -36,8 +36,8 @@ function App() {
   }, [imageData, params, runCompress])
 
   const handleDownload = useCallback(() => {
-    if (!result?.metadata) return
-    const b64 = result.metadata.compressed_rgba_b64
+    if (!result?.metadata || !result.compressed_rgba_b64) return
+    const b64 = result.compressed_rgba_b64
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
     const w = result.metadata.compressed_width
     const h = result.metadata.compressed_height
@@ -61,9 +61,9 @@ function App() {
 
   // Generate compressed image preview when result arrives
   useEffect(() => {
-    if (!result?.metadata) return
+    if (!result?.compressed_rgba_b64 || !result.metadata) return
     try {
-      const b64 = result.metadata.compressed_rgba_b64
+      const b64 = result.compressed_rgba_b64
       const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
       const w = result.metadata.compressed_width
       const h = result.metadata.compressed_height
