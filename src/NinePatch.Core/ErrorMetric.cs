@@ -4,181 +4,115 @@ namespace NinePatch.Core;
 
 /// <summary>
 /// Max per-channel error in sRGB space, [0,255] scale.
-/// RGB: convert linear→sRGB byte (uint8 level), take max absolute diff across R/G/B.
-/// Alpha: direct linear-float diff scaled to [0,255] (alpha is a blending coefficient,
-/// not a perceptual value — no round-first, just |a_orig - a_recon| * 255).
-/// When alphaWeighted, RGB error is multiplied by max(a_orig, a_recon) to suppress
-/// invisible pixels.
+/// RGB: convert linear→sRGB float, take max absolute diff across R/G/B.
+/// Alpha: direct linear-float diff scaled to [0,255].
+/// When alphaWeighted, RGB error multiplied by max(a_orig, a_recon).
 /// </summary>
 public static class ErrorMetric
 {
     /// <summary>
-    /// Compute max error between original and reconstructed linear RGBA.
+    /// Compute max error between original and reconstructed SoaImage.
     /// </summary>
-    /// <param name="original">Linear float array (H×W×4)</param>
-    /// <param name="reconstructed">Linear float array (H×W×4)</param>
+    /// <param name="original">SoaImage with linear float planes</param>
+    /// <param name="reconstructed">SoaImage with linear float planes</param>
     /// <param name="alphaWeighted">If true, RGB error multiplied by max(a_orig, a_recon)</param>
     /// <returns>Max error in [0,255] scale</returns>
-    public static float MaxError(ReadOnlySpan<float> original, ReadOnlySpan<float> reconstructed, bool alphaWeighted = true)
+    public static float MaxError(SoaImage original, SoaImage reconstructed, bool alphaWeighted = true)
     {
-        // Pass 1: LUT conversion + byte→float promotion (scatter-gather, not vectorizable)
-        // All byte→float conversion happens here so the core loop only sees float arrays.
-        int nPixels = original.Length / 4;
-        var origR = new float[nPixels];
-        var origG = new float[nPixels];
-        var origB = new float[nPixels];
-        var origA = new float[nPixels];
-        var reconR = new float[nPixels];
-        var reconG = new float[nPixels];
-        var reconB = new float[nPixels];
-        var reconA = new float[nPixels];
-
-        for (int i = 0; i < nPixels; i++)
-        {
-            origR[i] = ColorSpace.LinearToSrgbByte(original[i * 4]);
-            origG[i] = ColorSpace.LinearToSrgbByte(original[i * 4 + 1]);
-            origB[i] = ColorSpace.LinearToSrgbByte(original[i * 4 + 2]);
-            origA[i] = Math.Clamp(original[i * 4 + 3], 0f, 1f);
-            reconR[i] = ColorSpace.LinearToSrgbByte(reconstructed[i * 4]);
-            reconG[i] = ColorSpace.LinearToSrgbByte(reconstructed[i * 4 + 1]);
-            reconB[i] = ColorSpace.LinearToSrgbByte(reconstructed[i * 4 + 2]);
-            reconA[i] = Math.Clamp(reconstructed[i * 4 + 3], 0f, 1f);
-        }
-
-        // Pass 2: pure float arithmetic, stride-1, no branches — JIT-friendly
-        return alphaWeighted
-            ? MaxErrorWeighted(origR, origG, origB, origA, reconR, reconG, reconB, reconA)
-            : MaxErrorUnweighted(origR, origG, origB, origA, reconR, reconG, reconB, reconA);
-    }
-
-    /// <summary>Pure float max-reduce with alpha weighting. SIMD-accelerated.</summary>
-    private static float MaxErrorWeighted(
-        ReadOnlySpan<float> origR, ReadOnlySpan<float> origG, ReadOnlySpan<float> origB, ReadOnlySpan<float> origA,
-        ReadOnlySpan<float> reconR, ReadOnlySpan<float> reconG, ReadOnlySpan<float> reconB, ReadOnlySpan<float> reconA)
-    {
-        int n = origR.Length;
-        float maxErr = 0;
-
+        int n = original.PixelCount;
         int vecLen = Vector<float>.Count;
         int vecEnd = (n / vecLen) * vecLen;
+        float maxErr = 0;
 
         var vMax = Vector<float>.Zero;
         var vZero = Vector<float>.Zero;
 
+        // --- Main SIMD loop: process all channels sequentially per pixel vector ---
         for (int i = 0; i < vecEnd; i += vecLen)
         {
-            var oR = new Vector<float>(origR.Slice(i, vecLen));
-            var oG = new Vector<float>(origG.Slice(i, vecLen));
-            var oB = new Vector<float>(origB.Slice(i, vecLen));
-            var oA = new Vector<float>(origA.Slice(i, vecLen));
-            var rR = new Vector<float>(reconR.Slice(i, vecLen));
-            var rG = new Vector<float>(reconG.Slice(i, vecLen));
-            var rB = new Vector<float>(reconB.Slice(i, vecLen));
-            var rA = new Vector<float>(reconA.Slice(i, vecLen));
+            var oA = new Vector<float>(original.A, i);
+            var rA = new Vector<float>(reconstructed.A, i);
 
-            // RGB error = max(|oR-rR|, |oG-rG|, |oB-rB|)
-            var errR = Vector.Abs(oR - rR);
-            var errG = Vector.Abs(oG - rG);
-            var errB = Vector.Abs(oB - rB);
-            var rgbErr = Vector.Max(errR, Vector.Max(errG, errB));
+            // Alpha weight: max(oA, rA)
+            var alphaWeight = alphaWeighted
+                ? Vector.Max(oA, rA)
+                : Vector<float>.One;
 
-            // Alpha weight = max(oA, rA) — NaN-safe via Vector.Max (IEEE 754 maxNum)
-            var alphaWeight = Vector.Max(oA, rA);
+            // RGB error
+            var rgbErr = ComputeRgbError(original.R, reconstructed.R, i, vecLen);
+            rgbErr = Vector.Max(rgbErr, ComputeRgbError(original.G, reconstructed.G, i, vecLen));
+            rgbErr = Vector.Max(rgbErr, ComputeRgbError(original.B, reconstructed.B, i, vecLen));
+
+            // Apply alpha weight
             rgbErr *= alphaWeight;
 
-            // Alpha error = |oA - rA| * 255
-            var alphaErr = Vector.Abs(oA - rA) * 255f;
+            // Clamp to avoid negative/NaN artifacts
+            rgbErr = Vector.ConditionalSelect(Vector.LessThan(rgbErr, vZero), vZero, rgbErr);
 
-            // Pixel error = max(rgbErr, alphaErr)
-            var pixelErr = Vector.Max(rgbErr, alphaErr);
-
-            // Clamp negative zeros / NaN to zero for safe max-reduce
-            pixelErr = Vector.ConditionalSelect(Vector.LessThan(pixelErr, vZero), vZero, pixelErr);
-
-            vMax = Vector.Max(vMax, pixelErr);
+            vMax = Vector.Max(vMax, rgbErr);
         }
 
-        // Horizontal max-reduce of vector result
+        // Reduce vector max
         for (int j = 0; j < vecLen; j++)
         {
             float v = vMax[j];
             if (v > maxErr) maxErr = v;
         }
 
-        // Scalar tail
+        // --- Scalar tail for RGB ---
         for (int i = vecEnd; i < n; i++)
         {
-            float rgbErr = MathF.Max(MathF.Abs(origR[i] - reconR[i]),
-                         MathF.Max(MathF.Abs(origG[i] - reconG[i]),
-                                   MathF.Abs(origB[i] - reconB[i])));
-            rgbErr *= MathF.Max(origA[i], reconA[i]);
-            float alphaErr = MathF.Abs(origA[i] - reconA[i]) * 255f;
-            float pixelErr = MathF.Max(rgbErr, alphaErr);
-            if (pixelErr > maxErr) maxErr = pixelErr;
+            float rErr = SrgbDiffScalar(original.R[i], reconstructed.R[i]);
+            float gErr = SrgbDiffScalar(original.G[i], reconstructed.G[i]);
+            float bErr = SrgbDiffScalar(original.B[i], reconstructed.B[i]);
+            if (alphaWeighted)
+            {
+                float w = MathF.Max(original.A[i], reconstructed.A[i]);
+                rErr *= w; gErr *= w; bErr *= w;
+            }
+            if (rErr > maxErr) maxErr = rErr;
+            if (gErr > maxErr) maxErr = gErr;
+            if (bErr > maxErr) maxErr = bErr;
         }
+
+        // --- Alpha error (always |a_orig - a_recon| * 255, never weighted) ---
+        var vaMax = Vector<float>.Zero;
+        var vScale = new Vector<float>(255f);
+        for (int i = 0; i < vecEnd; i += vecLen)
+        {
+            var oA = new Vector<float>(original.A, i);
+            var rA = new Vector<float>(reconstructed.A, i);
+            var aErr = Vector.Abs(oA - rA) * vScale;
+            vaMax = Vector.Max(vaMax, aErr);
+        }
+        for (int j = 0; j < vecLen; j++)
+        {
+            float v = vaMax[j];
+            if (v > maxErr) maxErr = v;
+        }
+        for (int i = vecEnd; i < n; i++)
+        {
+            float aErr = MathF.Abs(original.A[i] - reconstructed.A[i]) * 255f;
+            if (aErr > maxErr) maxErr = aErr;
+        }
+
         return maxErr;
     }
 
-    /// <summary>Pure float max-reduce without alpha weighting. SIMD-accelerated.</summary>
-    private static float MaxErrorUnweighted(
-        ReadOnlySpan<float> origR, ReadOnlySpan<float> origG, ReadOnlySpan<float> origB, ReadOnlySpan<float> origA,
-        ReadOnlySpan<float> reconR, ReadOnlySpan<float> reconG, ReadOnlySpan<float> reconB, ReadOnlySpan<float> reconA)
+    private static Vector<float> ComputeRgbError(
+        float[] orig, float[] recon, int offset, int vecLen)
     {
-        int n = origR.Length;
-        float maxErr = 0;
+        var oCh = new Vector<float>(orig, offset);
+        var rCh = new Vector<float>(recon, offset);
+        var oSrgb = ColorSpace.LinearToSrgbSimd(oCh);
+        var rSrgb = ColorSpace.LinearToSrgbSimd(rCh);
+        return Vector.Abs(oSrgb - rSrgb);
+    }
 
-        int vecLen = Vector<float>.Count;
-        int vecEnd = (n / vecLen) * vecLen;
-
-        var vMax = Vector<float>.Zero;
-        var vZero = Vector<float>.Zero;
-
-        for (int i = 0; i < vecEnd; i += vecLen)
-        {
-            var oR = new Vector<float>(origR.Slice(i, vecLen));
-            var oG = new Vector<float>(origG.Slice(i, vecLen));
-            var oB = new Vector<float>(origB.Slice(i, vecLen));
-            var oA = new Vector<float>(origA.Slice(i, vecLen));
-            var rR = new Vector<float>(reconR.Slice(i, vecLen));
-            var rG = new Vector<float>(reconG.Slice(i, vecLen));
-            var rB = new Vector<float>(reconB.Slice(i, vecLen));
-            var rA = new Vector<float>(reconA.Slice(i, vecLen));
-
-            // RGB error = max(|oR-rR|, |oG-rG|, |oB-rB|)
-            var errR = Vector.Abs(oR - rR);
-            var errG = Vector.Abs(oG - rG);
-            var errB = Vector.Abs(oB - rB);
-            var rgbErr = Vector.Max(errR, Vector.Max(errG, errB));
-
-            // Alpha error = |oA - rA| * 255
-            var alphaErr = Vector.Abs(oA - rA) * 255f;
-
-            // Pixel error = max(rgbErr, alphaErr)
-            var pixelErr = Vector.Max(rgbErr, alphaErr);
-
-            // Clamp negative zeros / NaN to zero for safe max-reduce
-            pixelErr = Vector.ConditionalSelect(Vector.LessThan(pixelErr, vZero), vZero, pixelErr);
-
-            vMax = Vector.Max(vMax, pixelErr);
-        }
-
-        // Horizontal max-reduce of vector result
-        for (int j = 0; j < vecLen; j++)
-        {
-            float v = vMax[j];
-            if (v > maxErr) maxErr = v;
-        }
-
-        // Scalar tail
-        for (int i = vecEnd; i < n; i++)
-        {
-            float rgbErr = MathF.Max(MathF.Abs(origR[i] - reconR[i]),
-                         MathF.Max(MathF.Abs(origG[i] - reconG[i]),
-                                   MathF.Abs(origB[i] - reconB[i])));
-            float alphaErr = MathF.Abs(origA[i] - reconA[i]) * 255f;
-            float pixelErr = MathF.Max(rgbErr, alphaErr);
-            if (pixelErr > maxErr) maxErr = pixelErr;
-        }
-        return maxErr;
+    private static float SrgbDiffScalar(float o, float r)
+    {
+        float fo = ColorSpace.LinearToSrgbByte(o);
+        float fr = ColorSpace.LinearToSrgbByte(r);
+        return MathF.Abs(fo - fr);
     }
 }

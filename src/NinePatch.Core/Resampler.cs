@@ -4,7 +4,7 @@ namespace NinePatch.Core;
 
 /// <summary>
 /// 1D box downsample and bilinear upsample.
-/// Data layout: (height, width, 4) interleaved RGBA float array, row-major.
+/// Data layout: each channel is a separate flat float array of size Width × Height (row-major).
 /// </summary>
 public static class Resampler
 {
@@ -36,7 +36,7 @@ public static class Resampler
         return weights;
     }
 
-    /// <summary>Box-filter downsample along axis (0=Y, 1=X).</summary>
+    /// <summary>Box-filter downsample a single channel along axis (0=Y, 1=X).</summary>
     public static float[] Downsample1D(ReadOnlySpan<float> src, int srcW, int srcH, int dstLen, int axis)
     {
         int srcLen = axis == 1 ? srcW : srcH;
@@ -44,10 +44,9 @@ public static class Resampler
             return src.ToArray();
 
         var weights = BuildBoxWeights(srcLen, dstLen);
-        int channels = 4;
         int dstW = axis == 1 ? dstLen : srcW;
         int dstH = axis == 0 ? dstLen : srcH;
-        var dst = new float[dstW * dstH * channels];
+        var dst = new float[dstW * dstH];
 
         for (int d = 0; d < dstLen; d++)
         {
@@ -55,45 +54,28 @@ public static class Resampler
             {
                 float w = weights[d, s];
                 if (w == 0) continue;
-                var vw = new Vector4(w, w, w, w);
                 for (int o = 0; o < (axis == 1 ? srcH : srcW); o++)
                 {
-                    int si, di;
-                    if (axis == 1)
-                    {
-                        si = (s * srcH + o) * channels;
-                        di = (d * dstH + o) * channels;
-                    }
-                    else
-                    {
-                        si = (s * srcW + o) * channels;
-                        di = (d * dstW + o) * channels;
-                    }
-                    var srcPx = new Vector4(src[si], src[si + 1], src[si + 2], src[si + 3]);
-                    var dstPx = new Vector4(dst[di], dst[di + 1], dst[di + 2], dst[di + 3]);
-                    var acc = dstPx + srcPx * vw;
-                    dst[di]     = acc.X;
-                    dst[di + 1] = acc.Y;
-                    dst[di + 2] = acc.Z;
-                    dst[di + 3] = acc.W;
+                    int si = axis == 1 ? s * srcH + o : s * srcW + o;
+                    int di = axis == 1 ? d * dstH + o : d * dstW + o;
+                    dst[di] += src[si] * w;
                 }
             }
         }
         return dst;
     }
 
-    /// <summary>Bilinear upsample along axis (0=Y, 1=X) with half-pixel center.</summary>
+    /// <summary>Bilinear upsample a single channel along axis (0=Y, 1=X) with half-pixel center.</summary>
     public static float[] Upsample1D(ReadOnlySpan<float> src, int srcW, int srcH, int dstLen, int axis)
     {
         int srcLen = axis == 1 ? srcW : srcH;
         if (dstLen == srcLen)
             return src.ToArray();
 
-        int channels = 4;
         int otherLen = axis == 1 ? srcH : srcW;
         int dstW = axis == 1 ? dstLen : srcW;
         int dstH = axis == 0 ? dstLen : srcH;
-        var dst = new float[dstW * dstH * channels];
+        var dst = new float[dstW * dstH];
 
         // Precompute interpolation params
         var ix0 = new int[dstLen];
@@ -112,36 +94,41 @@ public static class Resampler
             t[dx] = u - MathF.Floor(u);
         }
 
+        int vecLen = Vector<float>.Count;
+
         for (int dx = 0; dx < dstLen; dx++)
         {
             float t0 = 1f - t[dx];
             float t1 = t[dx];
             int s0 = ix0[dx];
             int s1 = ix1[dx];
-            var vt0 = new Vector4(t0, t0, t0, t0);
-            var vt1 = new Vector4(t1, t1, t1, t1);
-            for (int o = 0; o < otherLen; o++)
+            var vt0 = new Vector<float>(t0);
+            var vt1 = new Vector<float>(t1);
+            for (int o = 0; o < otherLen;)
             {
-                int si0, si1, di;
-                if (axis == 1)
+                int remain = otherLen - o;
+                if (remain >= vecLen)
                 {
-                    si0 = (s0 * srcH + o) * channels;
-                    si1 = (s1 * srcH + o) * channels;
-                    di = (dx * dstH + o) * channels;
+                    int si0 = axis == 1 ? s0 * srcH + o : s0 * srcW + o;
+                    int si1 = axis == 1 ? s1 * srcH + o : s1 * srcW + o;
+                    int di = axis == 1 ? dx * dstH + o : dx * dstW + o;
+
+                    var px0 = new Vector<float>(src.Slice(si0, vecLen));
+                    var px1 = new Vector<float>(src.Slice(si1, vecLen));
+                    var result = px0 * vt0 + px1 * vt1;
+                    for (int j = 0; j < vecLen; j++)
+                        dst[di + j] = result[j];
+                    o += vecLen;
                 }
                 else
                 {
-                    si0 = (s0 * srcW + o) * channels;
-                    si1 = (s1 * srcW + o) * channels;
-                    di = (dx * dstW + o) * channels;
+                    int si0 = axis == 1 ? s0 * srcH + o : s0 * srcW + o;
+                    int si1 = axis == 1 ? s1 * srcH + o : s1 * srcW + o;
+                    int di = axis == 1 ? dx * dstH + o : dx * dstW + o;
+                    for (int j = 0; j < remain; j++)
+                        dst[di + j] = src[si0 + j] * t0 + src[si1 + j] * t1;
+                    break;
                 }
-                var px0 = new Vector4(src[si0], src[si0 + 1], src[si0 + 2], src[si0 + 3]);
-                var px1 = new Vector4(src[si1], src[si1 + 1], src[si1 + 2], src[si1 + 3]);
-                var result = px0 * vt0 + px1 * vt1;
-                dst[di]     = result.X;
-                dst[di + 1] = result.Y;
-                dst[di + 2] = result.Z;
-                dst[di + 3] = result.W;
             }
         }
         return dst;
