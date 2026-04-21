@@ -12,6 +12,7 @@ if (args.Length > 0 && (args[0] == "--help" || args[0] == "-h"))
 string? input = null, output = null, raw = null, metaOut = null;
 double threshold = 4.0, minSavings = 30.0;
 int margin = 0;
+bool rawOut = false;
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -19,6 +20,7 @@ for (int i = 0; i < args.Length; i++)
     {
         case "-o": case "--output": output = args[++i]; break;
         case "--raw": raw = args[++i]; break;
+        case "--raw-out": rawOut = true; break;
         case "--meta-out": metaOut = args[++i]; break;
         case "-t": case "--threshold": threshold = double.Parse(args[++i]); break;
         case "-m": case "--margin": margin = int.Parse(args[++i]); break;
@@ -60,14 +62,28 @@ switch (result.Status)
     case CompressStatus.Success:
     {
         var meta = result.Meta!.Value;
-        using var outImage = Image.LoadPixelData<Rgba32>(result.CompressedRgba!, meta.CompressedW, meta.CompressedH);
-        if (output is null or "-")
-            outImage.Save(Console.OpenStandardOutput(), new PngEncoder());
+        if (rawOut)
+        {
+            if (output is null or "-")
+                Console.OpenStandardOutput().Write(result.CompressedRgba!);
+            else
+            {
+                var dir = Path.GetDirectoryName(output);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllBytes(output, result.CompressedRgba!);
+            }
+        }
         else
         {
-            var dir = Path.GetDirectoryName(output);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            outImage.Save(output, new PngEncoder());
+            using var outImage = Image.LoadPixelData<Rgba32>(result.CompressedRgba!, meta.CompressedW, meta.CompressedH);
+            if (output is null or "-")
+                outImage.Save(Console.OpenStandardOutput(), new PngEncoder());
+            else
+            {
+                var dir = Path.GetDirectoryName(output);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                outImage.Save(output, new PngEncoder());
+            }
         }
 
         if (metaOut is not null)
@@ -125,8 +141,9 @@ static void PrintHelp()
           INPUT              Input PNG file (default: stdin with --raw)
 
         Options:
-          -o, --output FILE  Output PNG file (default: stdout)
+          -o, --output FILE  Output file (default: stdout)
           --raw WxH          Input is raw RGBA bytes
+          --raw-out          Output raw RGBA bytes instead of PNG
           --meta-out PATH    Output metadata JSON ('-' for stderr)
           -t, --threshold N  Error threshold [0-255] (default: 4.0)
           -m, --margin N     Minimum corner size (default: 0)
