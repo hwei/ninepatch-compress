@@ -10,6 +10,8 @@ build/
 # .NET build artifacts
 src/*/bin/
 src/*/obj/
+tests/*/bin/
+tests/*/obj/
 
 # Node modules
 src/NinePatch.Web/node_modules/
