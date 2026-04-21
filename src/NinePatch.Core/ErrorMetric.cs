@@ -19,34 +19,72 @@ public static class ErrorMetric
     /// <returns>Max error in [0,255] scale</returns>
     public static float MaxError(ReadOnlySpan<float> original, ReadOnlySpan<float> reconstructed, bool alphaWeighted = true)
     {
-        int len = original.Length;
-        float maxErr = 0;
+        // Pass 1: LUT conversion + byte→float promotion (scatter-gather, not vectorizable)
+        // All byte→float conversion happens here so the core loop only sees float arrays.
+        int nPixels = original.Length / 4;
+        var origR = new float[nPixels];
+        var origG = new float[nPixels];
+        var origB = new float[nPixels];
+        var origA = new float[nPixels];
+        var reconR = new float[nPixels];
+        var reconG = new float[nPixels];
+        var reconB = new float[nPixels];
+        var reconA = new float[nPixels];
 
-        for (int i = 0; i < len; i += 4)
+        for (int i = 0; i < nPixels; i++)
         {
-            float aOrig = Math.Clamp(original[i + 3], 0f, 1f);
-            float aRecon = Math.Clamp(reconstructed[i + 3], 0f, 1f);
+            origR[i] = ColorSpace.LinearToSrgbByte(original[i * 4]);
+            origG[i] = ColorSpace.LinearToSrgbByte(original[i * 4 + 1]);
+            origB[i] = ColorSpace.LinearToSrgbByte(original[i * 4 + 2]);
+            origA[i] = Math.Clamp(original[i * 4 + 3], 0f, 1f);
+            reconR[i] = ColorSpace.LinearToSrgbByte(reconstructed[i * 4]);
+            reconG[i] = ColorSpace.LinearToSrgbByte(reconstructed[i * 4 + 1]);
+            reconB[i] = ColorSpace.LinearToSrgbByte(reconstructed[i * 4 + 2]);
+            reconA[i] = Math.Clamp(reconstructed[i * 4 + 3], 0f, 1f);
+        }
 
-            // RGB: linear→sRGB byte, integer-level absolute diff, max across channels
-            float rgbErr = 0;
-            for (int c = 0; c < 3; c++)
-            {
-                byte oSrgb = ColorSpace.LinearToSrgbByte(Math.Clamp(original[i + c], 0f, 1f));
-                byte rSrgb = ColorSpace.LinearToSrgbByte(Math.Clamp(reconstructed[i + c], 0f, 1f));
-                float err = MathF.Abs(oSrgb - rSrgb);
-                if (err > rgbErr) rgbErr = err;
-            }
+        // Pass 2: pure float arithmetic, stride-1, no branches — JIT-friendly
+        return alphaWeighted
+            ? MaxErrorWeighted(origR, origG, origB, origA, reconR, reconG, reconB, reconA)
+            : MaxErrorUnweighted(origR, origG, origB, origA, reconR, reconG, reconB, reconA);
+    }
 
-            if (alphaWeighted)
-                rgbErr *= MathF.Max(aOrig, aRecon);
-
-            // Alpha: direct float diff in [0,255] scale — no round-first
-            float alphaErr = MathF.Abs(aOrig - aRecon) * 255f;
-
+    /// <summary>Pure float max-reduce with alpha weighting. No branches in loop body.</summary>
+    private static float MaxErrorWeighted(
+        ReadOnlySpan<float> origR, ReadOnlySpan<float> origG, ReadOnlySpan<float> origB, ReadOnlySpan<float> origA,
+        ReadOnlySpan<float> reconR, ReadOnlySpan<float> reconG, ReadOnlySpan<float> reconB, ReadOnlySpan<float> reconA)
+    {
+        int n = origR.Length;
+        float maxErr = 0;
+        for (int i = 0; i < n; i++)
+        {
+            float rgbErr = MathF.Max(MathF.Abs(origR[i] - reconR[i]),
+                         MathF.Max(MathF.Abs(origG[i] - reconG[i]),
+                                   MathF.Abs(origB[i] - reconB[i])));
+            rgbErr *= MathF.Max(origA[i], reconA[i]);
+            float alphaErr = MathF.Abs(origA[i] - reconA[i]) * 255f;
             float pixelErr = MathF.Max(rgbErr, alphaErr);
             if (pixelErr > maxErr) maxErr = pixelErr;
         }
+        return maxErr;
+    }
 
+    /// <summary>Pure float max-reduce without alpha weighting. No branches in loop body.</summary>
+    private static float MaxErrorUnweighted(
+        ReadOnlySpan<float> origR, ReadOnlySpan<float> origG, ReadOnlySpan<float> origB, ReadOnlySpan<float> origA,
+        ReadOnlySpan<float> reconR, ReadOnlySpan<float> reconG, ReadOnlySpan<float> reconB, ReadOnlySpan<float> reconA)
+    {
+        int n = origR.Length;
+        float maxErr = 0;
+        for (int i = 0; i < n; i++)
+        {
+            float rgbErr = MathF.Max(MathF.Abs(origR[i] - reconR[i]),
+                         MathF.Max(MathF.Abs(origG[i] - reconG[i]),
+                                   MathF.Abs(origB[i] - reconB[i])));
+            float alphaErr = MathF.Abs(origA[i] - reconA[i]) * 255f;
+            float pixelErr = MathF.Max(rgbErr, alphaErr);
+            if (pixelErr > maxErr) maxErr = pixelErr;
+        }
         return maxErr;
     }
 }
