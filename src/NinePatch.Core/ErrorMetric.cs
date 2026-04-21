@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace NinePatch.Core;
 
 /// <summary>
@@ -49,14 +51,62 @@ public static class ErrorMetric
             : MaxErrorUnweighted(origR, origG, origB, origA, reconR, reconG, reconB, reconA);
     }
 
-    /// <summary>Pure float max-reduce with alpha weighting. No branches in loop body.</summary>
+    /// <summary>Pure float max-reduce with alpha weighting. SIMD-accelerated.</summary>
     private static float MaxErrorWeighted(
         ReadOnlySpan<float> origR, ReadOnlySpan<float> origG, ReadOnlySpan<float> origB, ReadOnlySpan<float> origA,
         ReadOnlySpan<float> reconR, ReadOnlySpan<float> reconG, ReadOnlySpan<float> reconB, ReadOnlySpan<float> reconA)
     {
         int n = origR.Length;
         float maxErr = 0;
-        for (int i = 0; i < n; i++)
+
+        int vecLen = Vector<float>.Count;
+        int vecEnd = (n / vecLen) * vecLen;
+
+        var vMax = Vector<float>.Zero;
+        var vZero = Vector<float>.Zero;
+
+        for (int i = 0; i < vecEnd; i += vecLen)
+        {
+            var oR = new Vector<float>(origR.Slice(i, vecLen));
+            var oG = new Vector<float>(origG.Slice(i, vecLen));
+            var oB = new Vector<float>(origB.Slice(i, vecLen));
+            var oA = new Vector<float>(origA.Slice(i, vecLen));
+            var rR = new Vector<float>(reconR.Slice(i, vecLen));
+            var rG = new Vector<float>(reconG.Slice(i, vecLen));
+            var rB = new Vector<float>(reconB.Slice(i, vecLen));
+            var rA = new Vector<float>(reconA.Slice(i, vecLen));
+
+            // RGB error = max(|oR-rR|, |oG-rG|, |oB-rB|)
+            var errR = Vector.Abs(oR - rR);
+            var errG = Vector.Abs(oG - rG);
+            var errB = Vector.Abs(oB - rB);
+            var rgbErr = Vector.Max(errR, Vector.Max(errG, errB));
+
+            // Alpha weight = max(oA, rA) — NaN-safe via Vector.Max (IEEE 754 maxNum)
+            var alphaWeight = Vector.Max(oA, rA);
+            rgbErr *= alphaWeight;
+
+            // Alpha error = |oA - rA| * 255
+            var alphaErr = Vector.Abs(oA - rA) * 255f;
+
+            // Pixel error = max(rgbErr, alphaErr)
+            var pixelErr = Vector.Max(rgbErr, alphaErr);
+
+            // Clamp negative zeros / NaN to zero for safe max-reduce
+            pixelErr = Vector.ConditionalSelect(Vector.LessThan(pixelErr, vZero), vZero, pixelErr);
+
+            vMax = Vector.Max(vMax, pixelErr);
+        }
+
+        // Horizontal max-reduce of vector result
+        for (int j = 0; j < vecLen; j++)
+        {
+            float v = vMax[j];
+            if (v > maxErr) maxErr = v;
+        }
+
+        // Scalar tail
+        for (int i = vecEnd; i < n; i++)
         {
             float rgbErr = MathF.Max(MathF.Abs(origR[i] - reconR[i]),
                          MathF.Max(MathF.Abs(origG[i] - reconG[i]),
@@ -69,14 +119,58 @@ public static class ErrorMetric
         return maxErr;
     }
 
-    /// <summary>Pure float max-reduce without alpha weighting. No branches in loop body.</summary>
+    /// <summary>Pure float max-reduce without alpha weighting. SIMD-accelerated.</summary>
     private static float MaxErrorUnweighted(
         ReadOnlySpan<float> origR, ReadOnlySpan<float> origG, ReadOnlySpan<float> origB, ReadOnlySpan<float> origA,
         ReadOnlySpan<float> reconR, ReadOnlySpan<float> reconG, ReadOnlySpan<float> reconB, ReadOnlySpan<float> reconA)
     {
         int n = origR.Length;
         float maxErr = 0;
-        for (int i = 0; i < n; i++)
+
+        int vecLen = Vector<float>.Count;
+        int vecEnd = (n / vecLen) * vecLen;
+
+        var vMax = Vector<float>.Zero;
+        var vZero = Vector<float>.Zero;
+
+        for (int i = 0; i < vecEnd; i += vecLen)
+        {
+            var oR = new Vector<float>(origR.Slice(i, vecLen));
+            var oG = new Vector<float>(origG.Slice(i, vecLen));
+            var oB = new Vector<float>(origB.Slice(i, vecLen));
+            var oA = new Vector<float>(origA.Slice(i, vecLen));
+            var rR = new Vector<float>(reconR.Slice(i, vecLen));
+            var rG = new Vector<float>(reconG.Slice(i, vecLen));
+            var rB = new Vector<float>(reconB.Slice(i, vecLen));
+            var rA = new Vector<float>(reconA.Slice(i, vecLen));
+
+            // RGB error = max(|oR-rR|, |oG-rG|, |oB-rB|)
+            var errR = Vector.Abs(oR - rR);
+            var errG = Vector.Abs(oG - rG);
+            var errB = Vector.Abs(oB - rB);
+            var rgbErr = Vector.Max(errR, Vector.Max(errG, errB));
+
+            // Alpha error = |oA - rA| * 255
+            var alphaErr = Vector.Abs(oA - rA) * 255f;
+
+            // Pixel error = max(rgbErr, alphaErr)
+            var pixelErr = Vector.Max(rgbErr, alphaErr);
+
+            // Clamp negative zeros / NaN to zero for safe max-reduce
+            pixelErr = Vector.ConditionalSelect(Vector.LessThan(pixelErr, vZero), vZero, pixelErr);
+
+            vMax = Vector.Max(vMax, pixelErr);
+        }
+
+        // Horizontal max-reduce of vector result
+        for (int j = 0; j < vecLen; j++)
+        {
+            float v = vMax[j];
+            if (v > maxErr) maxErr = v;
+        }
+
+        // Scalar tail
+        for (int i = vecEnd; i < n; i++)
         {
             float rgbErr = MathF.Max(MathF.Abs(origR[i] - reconR[i]),
                          MathF.Max(MathF.Abs(origG[i] - reconG[i]),

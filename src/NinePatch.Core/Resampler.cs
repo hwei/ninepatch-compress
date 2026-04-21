@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace NinePatch.Core;
 
 /// <summary>
@@ -53,25 +55,27 @@ public static class Resampler
             {
                 float w = weights[d, s];
                 if (w == 0) continue;
+                var vw = new Vector4(w, w, w, w);
                 for (int o = 0; o < (axis == 1 ? srcH : srcW); o++)
                 {
                     int si, di;
                     if (axis == 1)
                     {
-                        // X axis: s is column, o is row — column-major-like output
                         si = (s * srcH + o) * channels;
                         di = (d * dstH + o) * channels;
                     }
                     else
                     {
-                        // Y axis: s is row, o is column — row-major output
                         si = (s * srcW + o) * channels;
                         di = (d * dstW + o) * channels;
                     }
-                    dst[di]     += src[si]     * w;
-                    dst[di + 1] += src[si + 1] * w;
-                    dst[di + 2] += src[si + 2] * w;
-                    dst[di + 3] += src[si + 3] * w;
+                    var srcPx = new Vector4(src[si], src[si + 1], src[si + 2], src[si + 3]);
+                    var dstPx = new Vector4(dst[di], dst[di + 1], dst[di + 2], dst[di + 3]);
+                    var acc = dstPx + srcPx * vw;
+                    dst[di]     = acc.X;
+                    dst[di + 1] = acc.Y;
+                    dst[di + 2] = acc.Z;
+                    dst[di + 3] = acc.W;
                 }
             }
         }
@@ -114,27 +118,30 @@ public static class Resampler
             float t1 = t[dx];
             int s0 = ix0[dx];
             int s1 = ix1[dx];
+            var vt0 = new Vector4(t0, t0, t0, t0);
+            var vt1 = new Vector4(t1, t1, t1, t1);
             for (int o = 0; o < otherLen; o++)
             {
                 int si0, si1, di;
                 if (axis == 1)
                 {
-                    // X axis: dx is column, o is row — uses column-major-like indexing
                     si0 = (s0 * srcH + o) * channels;
                     si1 = (s1 * srcH + o) * channels;
                     di = (dx * dstH + o) * channels;
                 }
                 else
                 {
-                    // Y axis: dx is row, o is column — uses row-major indexing
                     si0 = (s0 * srcW + o) * channels;
                     si1 = (s1 * srcW + o) * channels;
                     di = (dx * dstW + o) * channels;
                 }
-                dst[di]     = src[si0]     * t0 + src[si1]     * t1;
-                dst[di + 1] = src[si0 + 1] * t0 + src[si1 + 1] * t1;
-                dst[di + 2] = src[si0 + 2] * t0 + src[si1 + 2] * t1;
-                dst[di + 3] = src[si0 + 3] * t0 + src[si1 + 3] * t1;
+                var px0 = new Vector4(src[si0], src[si0 + 1], src[si0 + 2], src[si0 + 3]);
+                var px1 = new Vector4(src[si1], src[si1 + 1], src[si1 + 2], src[si1 + 3]);
+                var result = px0 * vt0 + px1 * vt1;
+                dst[di]     = result.X;
+                dst[di + 1] = result.Y;
+                dst[di + 2] = result.Z;
+                dst[di + 3] = result.W;
             }
         }
         return dst;
