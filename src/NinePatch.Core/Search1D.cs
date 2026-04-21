@@ -15,17 +15,17 @@ public static class Search1D
 
         if (axis == 1)
         {
-            // Extract X region [b, e)
+            // Extract X region [b, e) in column-major order: (col * srcH + row) * 4
             var region = new float[len * srcH * 4];
             for (int y = 0; y < srcH; y++)
             for (int x = b; x < e; x++)
             {
                 int si = (y * srcW + x) * 4;
-                int di = (y * len + (x - b)) * 4;
+                int di = ((x - b) * srcH + y) * 4;
                 Buffer.BlockCopy(strip, si * 4, region, di * 4, 16);
             }
 
-            // Downsample + upsample
+            // Downsample + upsample (axis=1 uses column-major-like indexing)
             float[] down = Resampler.Downsample1D(region, len, srcH, n, 1);
             float[] up = Resampler.Upsample1D(down, n, srcH, len, 1);
 
@@ -38,10 +38,10 @@ public static class Search1D
                     int si = (y * srcW + x) * 4;
                     Buffer.BlockCopy(strip, si * 4, dst, si * 4, 16);
                 }
-                // Upsampled region
+                // Upsampled region — up output is column-major-like: (col * srcH + row) * 4
                 for (int x = 0; x < len; x++)
                 {
-                    int si = (y * len + x) * 4;
+                    int si = (x * srcH + y) * 4;
                     int di = (y * srcW + b + x) * 4;
                     Buffer.BlockCopy(up, si * 4, dst, di * 4, 16);
                 }
@@ -79,7 +79,7 @@ public static class Search1D
                 }
                 else
                 {
-                    // Stretch region: copy from upsampled
+                    // Stretch region: copy from upsampled (row-major: (y-b) * srcW + x)
                     int si = ((y - b) * srcW + x) * 4;
                     Buffer.BlockCopy(up, si * 4, dst, di * 4, 16);
                 }

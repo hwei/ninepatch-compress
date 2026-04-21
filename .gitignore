@@ -14,3 +14,6 @@ src/*/obj/
 # Node modules
 src/NinePatch.Web/node_modules/
 src/NinePatch.Web/dist/
+
+# WASM framework files (copied from build output, not source)
+src/NinePatch.Web/public/_framework/

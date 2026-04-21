@@ -89,8 +89,8 @@
 
 ## 12. Integration & Cleanup
 
-- [ ] 12.1 Test full pipeline: CLI against Python test cases
+- [x] 12.1 Test full pipeline: CLI against Python test cases (2/2 samples match)
 - [x] 12.2 Test full pipeline: Web Demo end-to-end
-- [ ] 12.3 Build and test AOT CLI
-- [ ] 12.4 Build and test WASM module
-- [ ] 12.5 Delete `python-impl/` directory
+- [x] 12.3 Build and test AOT CLI (NativeAOT win-x64, requires vswhere in PATH)
+- [x] 12.4 Build and test WASM module (browser-wasm AOT)
+- [x] 12.5 Delete `python-impl/` directory

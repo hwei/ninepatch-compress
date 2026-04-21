@@ -175,22 +175,67 @@ magick input.webp RGBA:- | ninepatch --raw 800x600 -o compressed.raw
 ninepatch --raw 800x600 input.raw -o compressed.png
 ```
 
+## Build & Deploy
+
+### AOT CLI Build
+
+```bash
+# Add vswhere to PATH first (required for MSVC linker)
+set PATH=%PATH%;C:\Program Files (x86)\Microsoft Visual Studio\Installer
+
+dotnet publish src/NinePatch.CLI/NinePatch.CLI.csproj -c Release -r win-x64
+```
+
+Output: `src/NinePatch.CLI/bin/Release/net10.0/win-x64/publish/NinePatch.CLI.exe`
+Native executable (~3MB, no framework DLLs).
+
+**Note**: JSON serialization uses manual string interpolation (`$"""..."""`) instead of
+`System.Text.Json` — NativeAOT disables reflection-based serialization.
+
+### WASM Module Build
+
+```bash
+dotnet publish src/NinePatch.Wasm/NinePatch.Wasm.csproj -c Release
+```
+
+Output: `src/NinePatch.Wasm/bin/Release/net10.0/browser-wasm/AppBundle/_framework/`
+
+**Deploy to Web Demo**: copy `_framework/` contents to `src/NinePatch.Web/public/_framework/`:
+
+```bash
+# Windows
+xcopy /E /Y src\NinePatch.Wasm\bin\Release\net10.0\browser-wasm\AppBundle\_framework\* src\NinePatch.Web\public\_framework\
+
+# Or PowerShell
+Copy-Item -Recurse -Force src\NinePatch.Wasm\bin\Release\net10.0\browser-wasm\AppBundle\_framework\* src\NinePatch.Web\public\_framework\
+```
+
+### Web Demo
+
+```bash
+cd src/NinePatch.Web
+npm run dev
+```
+
 ## Project Structure
 
 ```
 F:\interesting\ninepatch_compress\
-├── python-impl/              # Original Python implementation (keep until done)
-│   ├── *.py
-│   └── tests/
 ├── src/
 │   ├── NinePatch.Core/
 │   ├── NinePatch.CLI/
 │   ├── NinePatch.Wasm/
 │   └── NinePatch.Web/          # Web Demo (Vite + React + UnoCSS)
+├── tests/
+│   ├── NinePatch.Tests/        # .NET unit/integration tests
+│   ├── test_cli_vs_python.py   # CLI vs expected-values comparison
+│   └── samples/                # Test images (rounded_panel.png, hgrad.png)
 ├── NinePatch.sln
 ├── CLAUDE.md
 └── openspec/
 ```
+
+The original `python-impl/` has been removed after CLI parity was verified (2/2 samples match).
 
 ## csproj Configuration
 
@@ -213,10 +258,11 @@ F:\interesting\ninepatch_compress\
     <TargetFramework>net10.0</TargetFramework>
     <PublishAot>true</PublishAot>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\NinePatch.Core\NinePatch.Core.csproj" />
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.5" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
   </ItemGroup>
 </Project>
 ```

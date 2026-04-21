@@ -56,42 +56,107 @@ public class DebugTests
             img[i + 3] = 1.0f;
         }
 
-        int b = 20, e = 74; // Y axis region
+        // Test both b=20,e=74 (len=54) and b=20,e=76 (len=56)
+        TestBoundary(img, w, h, 20, 74, 0);
+        TestBoundary(img, w, h, 20, 76, 0);
+        TestBoundary(img, w, h, 20, 108, 1); // X axis
+    }
 
-        // Manually call what BoundaryError does
+    private static void TestBoundary(float[] img, int w, int h, int b, int e, int axis)
+    {
         int len = e - b;
-        var region = new float[w * len * 4];
-        for (int y = b; y < e; y++)
-        for (int x = 0; x < w; x++)
+        int rw, rh;
+        float[] region;
+
+        if (axis == 1)
         {
-            int si = (y * w + x) * 4;
-            int di = ((y - b) * w + x) * 4;
-            region[di] = img[si]; region[di + 1] = img[si + 1];
-            region[di + 2] = img[si + 2]; region[di + 3] = img[si + 3];
+            region = new float[len * h * 4];
+            rw = len; rh = h;
+            for (int y = 0; y < h; y++)
+            for (int x = b; x < e; x++)
+            {
+                int si = (y * w + x) * 4;
+                int di = (y * len + (x - b)) * 4;
+                region[di] = img[si]; region[di + 1] = img[si + 1];
+                region[di + 2] = img[si + 2]; region[di + 3] = img[si + 3];
+            }
+        }
+        else
+        {
+            region = new float[w * len * 4];
+            rw = w; rh = len;
+            for (int y = b; y < e; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int si = (y * w + x) * 4;
+                int di = ((y - b) * w + x) * 4;
+                region[di] = img[si]; region[di + 1] = img[si + 1];
+                region[di + 2] = img[si + 2]; region[di + 3] = img[si + 3];
+            }
         }
 
-        float[] down = Resampler.Downsample1D(region, w, len, 2, 0);
-        float[] up = Resampler.Upsample1D(down, w, 2, len, 0);
+        float[] down = Resampler.Downsample1D(region, rw, rh, 2, axis);
+        // After downsample to 2:
+        // axis=0 (Y): down has rw cols × 2 rows → (srcW=rw, srcH=2)
+        // axis=1 (X): down has 2 cols × rh rows → (srcW=2, srcH=rh)
+        int downW = axis == 1 ? 2 : rw;
+        int downH = axis == 1 ? rh : 2;
+        float[] up = Resampler.Upsample1D(down, downW, downH, len, axis);
 
         var sb = new StringBuilder();
-        sb.AppendLine($"Region: {region.Length} ({w}x{len}x4)");
-        sb.AppendLine($"Down: {down.Length} ({w}x2x4)");
-        sb.AppendLine($"Up: {up.Length} (expected: {region.Length})");
-        sb.AppendLine($"Match: {up.Length == region.Length}");
+        sb.AppendLine($"BoundaryError(axis={axis}, b={b}, e={e}, len={len})");
+        sb.AppendLine($"  Region: {region.Length} ({rw}x{rh}x4)");
+        sb.AppendLine($"  Down: {down.Length}");
+        sb.AppendLine($"  Up: {up.Length} (expected: {region.Length})");
+        sb.AppendLine($"  Match: {up.Length == region.Length}");
         if (up.Length != region.Length)
         {
-            sb.AppendLine($"  Expected {region.Length}, got {up.Length}");
-            sb.AppendLine($"  Up dims would be: {w}x{len}x4 = {w*len*4}");
+            sb.AppendLine($"  MISMATCH! downW={downW}, downH={downH}");
         }
         else
         {
             float err = ErrorMetric.MaxError(region, up);
-            sb.AppendLine($"Boundary error (Y, b={b}, e={e}): {err}");
+            sb.AppendLine($"  Error: {err}");
         }
 
-        System.Diagnostics.Debug.WriteLine(sb.ToString());
         Console.WriteLine(sb.ToString());
         Assert.True(up.Length == region.Length, sb.ToString());
+    }
+
+    [Fact]
+    public void DebugHGradientRoundtrip()
+    {
+        int w = 100, h = 100;
+        byte[] imgU8 = CreateHGradientU8(w, h);
+        float[] imgLinear = ColorSpace.RgbaU8ToLinear(imgU8);
+
+        var resX = Search1D.SearchX(imgLinear, w, h, 4f);
+        var resY = Search1D.SearchY(imgLinear, w, h, 4f);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Search X: {resX}");
+        sb.AppendLine($"Search Y: {resY}");
+
+        var (compressed, meta) = Compressor.Compress2D(imgLinear, w, h, resX.Value, resY.Value);
+        sb.AppendLine($"Compressed: {meta.CompressedW}x{meta.CompressedH}");
+
+        float[] recon = Compressor.ReconstructStretched(compressed, meta.CompressedW, meta.CompressedH, meta);
+
+        // Check a few pixel values
+        for (int y = 0; y < h; y += 25)
+        for (int x = 0; x < w; x += 25)
+        {
+            int idx = (y * w + x) * 4;
+            float origSrgb = ColorSpace.LinearToSrgbByte(imgLinear[idx]);
+            float reconSrgb = ColorSpace.LinearToSrgbByte(recon[idx]);
+            sb.AppendLine($"  ({x},{y}) orig={origSrgb:F1} recon={reconSrgb:F1} diff={MathF.Abs(origSrgb - reconSrgb):F1}");
+        }
+
+        float err = ErrorMetric.MaxError(imgLinear, recon);
+        sb.AppendLine($"MaxError = {err}");
+
+        Console.WriteLine(sb.ToString());
+        Assert.True(err <= 5f, sb.ToString());
     }
 
     [Fact]
@@ -250,6 +315,19 @@ public class DebugTests
             img[i * 4 + 1] = g;
             img[i * 4 + 2] = b;
             img[i * 4 + 3] = a;
+        }
+        return img;
+    }
+
+    private static byte[] CreateHGradientU8(int w, int h)
+    {
+        var img = new byte[w * h * 4];
+        for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+        {
+            int i = (y * w + x) * 4;
+            byte v = (byte)(x * 255 / (w - 1));
+            img[i] = v; img[i + 1] = v; img[i + 2] = v; img[i + 3] = 255;
         }
         return img;
     }

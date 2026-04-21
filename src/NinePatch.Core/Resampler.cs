@@ -55,8 +55,19 @@ public static class Resampler
                 if (w == 0) continue;
                 for (int o = 0; o < (axis == 1 ? srcH : srcW); o++)
                 {
-                    int si = axis == 1 ? (s * srcH + o) * channels : (o * srcLen + s) * channels;
-                    int di = axis == 1 ? (d * dstH + o) * channels : (o * dstLen + d) * channels;
+                    int si, di;
+                    if (axis == 1)
+                    {
+                        // X axis: s is column, o is row — column-major-like output
+                        si = (s * srcH + o) * channels;
+                        di = (d * dstH + o) * channels;
+                    }
+                    else
+                    {
+                        // Y axis: s is row, o is column — row-major output
+                        si = (s * srcW + o) * channels;
+                        di = (d * dstW + o) * channels;
+                    }
                     dst[di]     += src[si]     * w;
                     dst[di + 1] += src[si + 1] * w;
                     dst[di + 2] += src[si + 2] * w;
@@ -105,9 +116,21 @@ public static class Resampler
             int s1 = ix1[dx];
             for (int o = 0; o < otherLen; o++)
             {
-                int si0 = (axis == 1 ? (s0 * srcH + o) : (o * srcLen + s0)) * channels;
-                int si1 = (axis == 1 ? (s1 * srcH + o) : (o * srcLen + s1)) * channels;
-                int di = (axis == 1 ? (dx * dstH + o) : (o * dstLen + dx)) * channels;
+                int si0, si1, di;
+                if (axis == 1)
+                {
+                    // X axis: dx is column, o is row — uses column-major-like indexing
+                    si0 = (s0 * srcH + o) * channels;
+                    si1 = (s1 * srcH + o) * channels;
+                    di = (dx * dstH + o) * channels;
+                }
+                else
+                {
+                    // Y axis: dx is row, o is column — uses row-major indexing
+                    si0 = (s0 * srcW + o) * channels;
+                    si1 = (s1 * srcW + o) * channels;
+                    di = (dx * dstW + o) * channels;
+                }
                 dst[di]     = src[si0]     * t0 + src[si1]     * t1;
                 dst[di + 1] = src[si0 + 1] * t0 + src[si1 + 1] * t1;
                 dst[di + 2] = src[si0 + 2] * t0 + src[si1 + 2] * t1;

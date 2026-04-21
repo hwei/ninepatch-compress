@@ -56,25 +56,101 @@ public static class Compressor
         // Middle row (yb..ye): Y-downsample all, X-downsample center only
         {
             int stretchH = ye - yb;
-            var midSrc = new float[width * stretchH * 4];
-            CopyRect(img, width, midSrc, width, 0, yb, 0, 0, width, stretchH);
 
-            // Downsample Y first
-            float[] midY = Resampler.Downsample1D(midSrc, width, stretchH, ny, 0);
-            // midY layout: (row, col, ch) with row < ny, col < width, stored as (col * ny + row) * 4
+            // Extract the stretch region as a 2D array (ny rows × width cols, row-major)
+            var midSrc2D = new float[ny * width * 4];
+            for (int row = 0; row < ny; row++)
+            for (int col = 0; col < width; col++)
+            {
+                // For Y-downsample: each output row is a weighted average of input rows
+                // Using box filter: row r averages input rows [r*stretchH/ny .. (r+1)*stretchH/ny)
+                float scale = (float)stretchH / ny;
+                float lo = row * scale;
+                float hi = (row + 1) * scale;
+                int i0 = (int)MathF.Floor(lo);
+                int i1 = Math.Min((int)MathF.Ceiling(hi), stretchH);
+                float count = 0;
+                float rSum = 0, gSum = 0, bSum = 0, aSum = 0;
+                for (int sy = i0; sy < i1; sy++)
+                {
+                    float overlap = Math.Min(sy + 1, hi) - Math.Max(sy, lo);
+                    int si = (sy * width + col) * 4;
+                    rSum += img[((yb + sy) * width + col) * 4] * overlap;
+                    gSum += img[((yb + sy) * width + col) * 4 + 1] * overlap;
+                    bSum += img[((yb + sy) * width + col) * 4 + 2] * overlap;
+                    aSum += img[((yb + sy) * width + col) * 4 + 3] * overlap;
+                    count += overlap;
+                }
+                int di = (row * width + col) * 4;
+                float inv = count > 0 ? 1f / count : 0;
+                midSrc2D[di] = rSum * inv;
+                midSrc2D[di + 1] = gSum * inv;
+                midSrc2D[di + 2] = bSum * inv;
+                midSrc2D[di + 3] = aSum * inv;
+            }
 
-            // Left: Y-downsample only, X unchanged
-            var midLeft = cwLeft > 0 ? ExtractRect(midY, width, ny, 0, 0, cwLeft, ny) : null;
-            // Center: Y + X downsample
-            var midCenter = Resampler.Downsample1D(
-                ExtractRect(midY, width, ny, xb, 0, xe - xb, ny), xe - xb, ny, nx, 1);
-            // Right: Y-downsample only, X unchanged
-            var midRight = cwRight > 0 ? ExtractRect(midY, width, ny, xe, 0, cwRight, ny) : null;
+            // Now X-downsample the center region of midSrc2D
+            var midCenter2D = new float[ny * nx * 4];
+            for (int row = 0; row < ny; row++)
+            {
+                float scale = (float)(xe - xb) / nx;
+                for (int dx = 0; dx < nx; dx++)
+                {
+                    float lo = dx * scale;
+                    float hi = (dx + 1) * scale;
+                    int i0 = Math.Max((int)MathF.Floor(lo), 0);
+                    int i1 = Math.Min((int)MathF.Ceiling(hi), xe - xb);
+                    float count = 0;
+                    float rSum = 0, gSum = 0, bSum = 0, aSum = 0;
+                    for (int sx = i0; sx < i1; sx++)
+                    {
+                        float overlap = Math.Min(sx + 1, hi) - Math.Max(sx, lo);
+                        int si = (row * width + xb + sx) * 4;
+                        rSum += midSrc2D[si] * overlap;
+                        gSum += midSrc2D[si + 1] * overlap;
+                        bSum += midSrc2D[si + 2] * overlap;
+                        aSum += midSrc2D[si + 3] * overlap;
+                        count += overlap;
+                    }
+                    int di = (row * nx + dx) * 4;
+                    float inv = count > 0 ? 1f / count : 0;
+                    midCenter2D[di] = rSum * inv;
+                    midCenter2D[di + 1] = gSum * inv;
+                    midCenter2D[di + 2] = bSum * inv;
+                    midCenter2D[di + 3] = aSum * inv;
+                }
+            }
 
-            int cx = 0;
-            if (midLeft != null) { CopyRect(midLeft, cwLeft, compressed, w2, 0, 0, cx, chTop, cwLeft, chMid); cx += cwLeft; }
-            CopyRect(midCenter, nx, compressed, w2, 0, 0, cx, chTop, nx, chMid); cx += nx;
-            if (midRight != null) { CopyRect(midRight, cwRight, compressed, w2, 0, 0, cx, chTop, cwRight, chMid); }
+            // Assemble middle row into compressed image
+            int dy = chTop;
+            for (int row = 0; row < ny; row++)
+            {
+                int dstRowStart = (dy + row) * w2 * 4;
+                // Left columns
+                for (int col = 0; col < cwLeft; col++)
+                {
+                    int si = (row * width + col) * 4;
+                    int di = dstRowStart + col * 4;
+                    compressed[di] = midSrc2D[si]; compressed[di + 1] = midSrc2D[si + 1];
+                    compressed[di + 2] = midSrc2D[si + 2]; compressed[di + 3] = midSrc2D[si + 3];
+                }
+                // Center columns (X-downsampled)
+                for (int col = 0; col < nx; col++)
+                {
+                    int si = (row * nx + col) * 4;
+                    int di = dstRowStart + (cwLeft + col) * 4;
+                    compressed[di] = midCenter2D[si]; compressed[di + 1] = midCenter2D[si + 1];
+                    compressed[di + 2] = midCenter2D[si + 2]; compressed[di + 3] = midCenter2D[si + 3];
+                }
+                // Right columns
+                for (int col = 0; col < cwRight; col++)
+                {
+                    int si = (row * width + xe + col) * 4;
+                    int di = dstRowStart + (cwLeft + nx + col) * 4;
+                    compressed[di] = midSrc2D[si]; compressed[di + 1] = midSrc2D[si + 1];
+                    compressed[di + 2] = midSrc2D[si + 2]; compressed[di + 3] = midSrc2D[si + 3];
+                }
+            }
         }
 
         // Bottom row (ye..height): copy left/right from compressed, upsample center X
@@ -156,21 +232,94 @@ public static class Compressor
 
         // Middle strip: first upsample Y, then expand X
         {
-            var midComp = ExtractRect(compressed, compW, compH, 0, chTop, compW, chMid);
-            var midYUp = Resampler.Upsample1D(midComp, compW, chMid, origStretchH, 0);
+            // Extract middle row from compressed as 2D (ny rows × compW cols, row-major)
+            var mid2D = new float[ny * compW * 4];
+            for (int row = 0; row < ny; row++)
+            for (int col = 0; col < compW; col++)
+            {
+                int si = ((chTop + row) * compW + col) * 4;
+                int di = (row * compW + col) * 4;
+                mid2D[di] = compressed[si]; mid2D[di + 1] = compressed[si + 1];
+                mid2D[di + 2] = compressed[si + 2]; mid2D[di + 3] = compressed[si + 3];
+            }
 
-            // Left: unchanged
-            if (cwLeft > 0)
-                CopyRect(result, w, midYUp, compW, 0, yb, 0, 0, cwLeft, origStretchH);
+            // Upsample Y from ny to origStretchH
+            var midYUp = new float[origStretchH * compW * 4];
+            for (int dy2 = 0; dy2 < origStretchH; dy2++)
+            {
+                float u = (dy2 + 0.5f) * ny / origStretchH - 0.5f;
+                int i0 = (int)MathF.Floor(u);
+                int i1 = i0 + 1;
+                if (i0 < 0) i0 = 0;
+                if (i0 >= ny) i0 = ny - 1;
+                if (i1 >= ny) i1 = ny - 1;
+                float t = u - MathF.Floor(u);
+                float t0 = 1f - t, t1 = t;
+                for (int col = 0; col < compW; col++)
+                {
+                    int si0 = (i0 * compW + col) * 4;
+                    int si1 = (i1 * compW + col) * 4;
+                    int di = (dy2 * compW + col) * 4;
+                    midYUp[di]     = mid2D[si0]     * t0 + mid2D[si1]     * t1;
+                    midYUp[di + 1] = mid2D[si0 + 1] * t0 + mid2D[si1 + 1] * t1;
+                    midYUp[di + 2] = mid2D[si0 + 2] * t0 + mid2D[si1 + 2] * t1;
+                    midYUp[di + 3] = mid2D[si0 + 3] * t0 + mid2D[si1 + 3] * t1;
+                }
+            }
 
-            // Center: upsample X
-            var centerSrc = ExtractRect(midYUp, compW, origStretchH, cwLeft, 0, cwMid, origStretchH);
-            var centerUp = Resampler.Upsample1D(centerSrc, cwMid, origStretchH, origStretchW, 1);
-            CopyRect(result, w, centerUp, origStretchW, cwLeft, yb, 0, 0, origStretchW, origStretchH);
+            // Upsample X from nx to origStretchW in the center region
+            var centerUp = new float[origStretchH * origStretchW * 4];
+            for (int dy2 = 0; dy2 < origStretchH; dy2++)
+            {
+                for (int dx2 = 0; dx2 < origStretchW; dx2++)
+                {
+                    float u = (dx2 + 0.5f) * nx / origStretchW - 0.5f;
+                    int i0 = (int)MathF.Floor(u);
+                    int i1 = i0 + 1;
+                    if (i0 < 0) i0 = 0;
+                    if (i0 >= nx) i0 = nx - 1;
+                    if (i1 >= nx) i1 = nx - 1;
+                    float t = u - MathF.Floor(u);
+                    float t0 = 1f - t, t1 = t;
+                    int si0 = (dy2 * compW + cwLeft + i0) * 4;
+                    int si1 = (dy2 * compW + cwLeft + i1) * 4;
+                    int di = (dy2 * origStretchW + dx2) * 4;
+                    centerUp[di]     = midYUp[si0]     * t0 + midYUp[si1]     * t1;
+                    centerUp[di + 1] = midYUp[si0 + 1] * t0 + midYUp[si1 + 1] * t1;
+                    centerUp[di + 2] = midYUp[si0 + 2] * t0 + midYUp[si1 + 2] * t1;
+                    centerUp[di + 3] = midYUp[si0 + 3] * t0 + midYUp[si1 + 3] * t1;
+                }
+            }
 
-            // Right: unchanged
-            if (cwRight > 0)
-                CopyRect(result, w, midYUp, compW, cwLeft + origStretchW, yb, cwLeft + cwMid, 0, cwRight, origStretchH);
+            // Write to result
+            for (int dy2 = 0; dy2 < origStretchH; dy2++)
+            {
+                int dstRowStart = ((yb + dy2) * w) * 4;
+                // Left
+                for (int col = 0; col < cwLeft; col++)
+                {
+                    int si = (dy2 * compW + col) * 4;
+                    int di = dstRowStart + col * 4;
+                    result[di] = midYUp[si]; result[di + 1] = midYUp[si + 1];
+                    result[di + 2] = midYUp[si + 2]; result[di + 3] = midYUp[si + 3];
+                }
+                // Center (X-upsampled)
+                for (int col = 0; col < origStretchW; col++)
+                {
+                    int si = (dy2 * origStretchW + col) * 4;
+                    int di = dstRowStart + (cwLeft + col) * 4;
+                    result[di] = centerUp[si]; result[di + 1] = centerUp[si + 1];
+                    result[di + 2] = centerUp[si + 2]; result[di + 3] = centerUp[si + 3];
+                }
+                // Right
+                for (int col = 0; col < cwRight; col++)
+                {
+                    int si = (dy2 * compW + cwLeft + nx + col) * 4;
+                    int di = dstRowStart + (cwLeft + origStretchW + col) * 4;
+                    result[di] = midYUp[si]; result[di + 1] = midYUp[si + 1];
+                    result[di + 2] = midYUp[si + 2]; result[di + 3] = midYUp[si + 3];
+                }
+            }
         }
 
         // Bottom strip: extract, expand X, write to result
@@ -226,8 +375,10 @@ public static class Compressor
         }
 
         float[] down = Resampler.Downsample1D(region, rw, rh, 2, axis);
-        int srcW_up = axis == 1 ? rh : rw;
-        float[] up = Resampler.Upsample1D(down, 2, srcW_up, len, axis);
+        // Downsampled dimensions: axis=0 → (rw cols × 2 rows), axis=1 → (2 cols × rh rows)
+        int downW = axis == 1 ? 2 : rw;
+        int downH = axis == 1 ? rh : 2;
+        float[] up = Resampler.Upsample1D(down, downW, downH, len, axis);
         if (up.Length != region.Length)
             return 999f;
         return ErrorMetric.MaxError(region, up);

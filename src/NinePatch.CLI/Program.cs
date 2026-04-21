@@ -72,15 +72,24 @@ switch (result.Status)
 
         if (metaOut is not null)
         {
-            var json = System.Text.Json.JsonSerializer.Serialize(new
+            var json = $$"""
             {
-                xb = meta.Xb, xe = meta.Xe, yb = meta.Yb, ye = meta.Ye,
-                nx = meta.Nx, ny = meta.Ny,
-                original_width = meta.OriginalW, original_height = meta.OriginalH,
-                compressed_width = meta.CompressedW, compressed_height = meta.CompressedH,
-                error_x = meta.ErrorX, error_y = meta.ErrorY,
-                error_2d = meta.Error2d, savings_pct = meta.SavingsPct
-            }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+              "xb": {{meta.Xb}},
+              "xe": {{meta.Xe}},
+              "yb": {{meta.Yb}},
+              "ye": {{meta.Ye}},
+              "nx": {{meta.Nx}},
+              "ny": {{meta.Ny}},
+              "original_width": {{meta.OriginalW}},
+              "original_height": {{meta.OriginalH}},
+              "compressed_width": {{meta.CompressedW}},
+              "compressed_height": {{meta.CompressedH}},
+              "error_x": {{meta.ErrorX:F2}},
+              "error_y": {{meta.ErrorY:F2}},
+              "error_2d": {{meta.Error2d:F2}},
+              "savings_pct": {{meta.SavingsPct:F1}}
+            }
+            """;
 
             if (metaOut == "-")
                 Console.Error.WriteLine(json);
