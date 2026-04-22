@@ -357,9 +357,11 @@ public static class Compressor
             while (curMargin + marginStep <= maxMargin)
             {
                 curMargin += marginStep;
-                resX = Search1D.SearchX(imgLinear, (float)threshold, curMargin);
-                resY = Search1D.SearchY(imgLinear, (float)threshold, curMargin);
-                if (resX is not null && resY is not null) break;
+                if (resX is null)
+                    resX = Search1D.SearchX(imgLinear, (float)threshold, curMargin);
+                if (resY is null)
+                    resY = Search1D.SearchY(imgLinear, (float)threshold, curMargin);
+                if (resX is not null || resY is not null) break;
             }
         }
 
