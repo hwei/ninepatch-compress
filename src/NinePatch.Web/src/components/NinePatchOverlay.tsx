@@ -1,30 +1,44 @@
 interface NinePatchOverlayProps {
-  meta: {
-    xb: number;
-    xe: number;
-    yb: number;
-    ye: number;
-  };
+  meta: { xb: number; xe: number; yb: number; ye: number };
   width: number;
   height: number;
+  zoom?: number;
+  subtle?: boolean;
 }
 
-export function NinePatchOverlay({ meta, width, height }: NinePatchOverlayProps) {
+/**
+ * Nine-patch grid overlay: cyan X-lines, amber Y-lines,
+ * and corner intersection dots.
+ */
+export function NinePatchOverlay({ meta, width, height, zoom = 1, subtle = false }: NinePatchOverlayProps) {
+  const W = width * zoom;
+  const H = height * zoom;
+  const xb = meta.xb * zoom;
+  const xe = meta.xe * zoom;
+  const yb = meta.yb * zoom;
+  const ye = meta.ye * zoom;
+
   return (
     <svg
       className="absolute inset-0 pointer-events-none"
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
-      style={{ width: '100%', height: '100%' }}
+      width={W}
+      height={H}
+      style={{ overflow: 'visible' }}
     >
-      {/* Horizontal lines */}
-      <line x1={0} y1={meta.yb} x2={width} y2={meta.yb} stroke="#ef4444" strokeWidth={1} strokeDasharray="4,2" />
-      <line x1={0} y1={meta.ye} x2={width} y2={meta.ye} stroke="#ef4444" strokeWidth={1} strokeDasharray="4,2" />
-      {/* Vertical lines */}
-      <line x1={meta.xb} y1={0} x2={meta.xb} y2={height} stroke="#3b82f6" strokeWidth={1} strokeDasharray="4,2" />
-      <line x1={meta.xe} y1={0} x2={meta.xe} y2={height} stroke="#3b82f6" strokeWidth={1} strokeDasharray="4,2" />
-      {/* Corner labels */}
-      <rect x={meta.xb} y={meta.yb} width={meta.xe - meta.xb} height={meta.ye - meta.yb} fill="rgba(59,130,246,0.1)" stroke="#3b82f6" strokeWidth={1} />
+      <line x1={xb} y1={-4} x2={xb} y2={H + 4}
+            stroke="var(--np-x)" strokeWidth={1} shapeRendering="crispEdges" />
+      <line x1={xe} y1={-4} x2={xe} y2={H + 4}
+            stroke="var(--np-x)" strokeWidth={1} shapeRendering="crispEdges" />
+
+      <line x1={-4} y1={yb} x2={W + 4} y2={yb}
+            stroke="var(--np-y)" strokeWidth={1} shapeRendering="crispEdges" />
+      <line x1={-4} y1={ye} x2={W + 4} y2={ye}
+            stroke="var(--np-y)" strokeWidth={1} shapeRendering="crispEdges" />
+
+      {!subtle && ([[xb, yb], [xe, yb], [xb, ye], [xe, ye]] as [number, number][]).map(([cx, cy], i) => (
+        <circle key={i} cx={cx} cy={cy} r={2.5}
+                fill="var(--bg)" stroke="var(--accent)" strokeWidth={1} />
+      ))}
     </svg>
   );
 }

@@ -9,6 +9,7 @@ interface UseCompressorReturn {
   result: CompressResult | null;
   compressing: boolean;
   runCompress: (imageData: ImageData, params: CompressParams) => Promise<void>;
+  resetResult: () => void;
 }
 
 export function useCompressor(): UseCompressorReturn {
@@ -47,5 +48,9 @@ export function useCompressor(): UseCompressorReturn {
     }
   }, [wasmReady]);
 
-  return { wasmReady, wasmLoading, wasmError, result, compressing, runCompress };
+  const resetResult = useCallback(() => {
+    setResult(null);
+  }, []);
+
+  return { wasmReady, wasmLoading, wasmError, result, compressing, runCompress, resetResult };
 }
