@@ -3,6 +3,13 @@ using System.Numerics;
 namespace NinePatch.Core;
 
 /// <summary>
+/// Precomputed sRGB planes for the original image. Used by Search1D to avoid
+/// repeated LinearToSrgbSimd calls on the original (which never changes).
+/// </summary>
+public readonly record struct PrecomputedSrgb(
+    float[] R, float[] G, float[] B, float[] Alpha);
+
+/// <summary>
 /// Max per-channel error in sRGB space, [0,255] scale.
 /// RGB: convert linear→sRGB float, take max absolute diff across R/G/B.
 /// Alpha: direct linear-float diff scaled to [0,255].
@@ -105,6 +112,8 @@ public static class ErrorMetric
     /// </summary>
     public static bool PassesThreshold(SoaImage original, SoaImage reconstructed, float threshold, bool alphaWeighted = true)
     {
+        // Delegate to the precomputed version by computing sRGB on the fly
+        // (this path is only used by tests/non-hot paths)
         int n = original.PixelCount;
         int vecLen = Vector<float>.Count;
         int vecEnd = (n / vecLen) * vecLen;
@@ -161,12 +170,75 @@ public static class ErrorMetric
         return true;
     }
 
+    /// <summary>
+    /// Overload accepting precomputed sRGB planes for the original image.
+    /// RGB + Alpha are merged into a single early-exit pass.
+    /// </summary>
+    public static bool PassesThreshold(
+        PrecomputedSrgb origSrgb, SoaImage reconstructed, float threshold, bool alphaWeighted = true)
+    {
+        int n = reconstructed.PixelCount;
+        int vecLen = Vector<float>.Count;
+        int vecEnd = (n / vecLen) * vecLen;
+        var vZero = Vector<float>.Zero;
+
+        // --- Main SIMD loop: merged RGB + Alpha early-exit ---
+        for (int i = 0; i < vecEnd; i += vecLen)
+        {
+            var oA = new Vector<float>(origSrgb.Alpha, i);
+            var rA = new Vector<float>(reconstructed.A, i);
+            var alphaWeight = alphaWeighted ? Vector.Max(oA, rA) : Vector<float>.One;
+
+            var rgbErr = ComputeRgbErrorPrecomputed(origSrgb.R, reconstructed.R, i);
+            rgbErr = Vector.Max(rgbErr, ComputeRgbErrorPrecomputed(origSrgb.G, reconstructed.G, i));
+            rgbErr = Vector.Max(rgbErr, ComputeRgbErrorPrecomputed(origSrgb.B, reconstructed.B, i));
+            rgbErr *= alphaWeight;
+            rgbErr = Vector.ConditionalSelect(Vector.LessThan(rgbErr, vZero), vZero, rgbErr);
+
+            // Check RGB elements
+            for (int j = 0; j < vecLen; j++)
+                if (rgbErr[j] > threshold) return false;
+
+            // Check alpha elements
+            var aErr = Vector.Abs(oA - rA) * new Vector<float>(255f);
+            for (int j = 0; j < vecLen; j++)
+                if (aErr[j] > threshold) return false;
+        }
+
+        // --- Scalar tail ---
+        for (int i = vecEnd; i < n; i++)
+        {
+            float rErr = MathF.Abs(origSrgb.R[i] - ColorSpace.LinearToSrgbByte(reconstructed.R[i]) / 255f);
+            float gErr = MathF.Abs(origSrgb.G[i] - ColorSpace.LinearToSrgbByte(reconstructed.G[i]) / 255f);
+            float bErr = MathF.Abs(origSrgb.B[i] - ColorSpace.LinearToSrgbByte(reconstructed.B[i]) / 255f);
+            float aErr = MathF.Abs(origSrgb.Alpha[i] - reconstructed.A[i]) * 255f;
+            if (alphaWeighted)
+            {
+                float w = MathF.Max(origSrgb.Alpha[i], reconstructed.A[i]);
+                rErr *= w; gErr *= w; bErr *= w;
+            }
+            if (rErr > threshold || gErr > threshold || bErr > threshold || aErr > threshold)
+                return false;
+        }
+
+        return true;
+    }
+
     private static Vector<float> ComputeRgbError(
         float[] orig, float[] recon, int offset, int vecLen)
     {
         var oCh = new Vector<float>(orig, offset);
         var rCh = new Vector<float>(recon, offset);
         var oSrgb = ColorSpace.LinearToSrgbSimd(oCh);
+        var rSrgb = ColorSpace.LinearToSrgbSimd(rCh);
+        return Vector.Abs(oSrgb - rSrgb) * new Vector<float>(255f);
+    }
+
+    private static Vector<float> ComputeRgbErrorPrecomputed(
+        float[] origSrgb, float[] recon, int offset)
+    {
+        var oSrgb = new Vector<float>(origSrgb, offset);
+        var rCh = new Vector<float>(recon, offset);
         var rSrgb = ColorSpace.LinearToSrgbSimd(rCh);
         return Vector.Abs(oSrgb - rSrgb) * new Vector<float>(255f);
     }
