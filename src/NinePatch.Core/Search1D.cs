@@ -200,6 +200,187 @@ public static class Search1D
         return true;
     }
 
+    // --- Variance pre-filter ---
+
+    /// <summary>
+    /// Computes per-position variance prefix-sum for the given axis.
+    /// X axis (axis=1): per-column variance across all rows, max across channels.
+    /// Y axis (axis=0): per-row variance across all columns, max across channels.
+    /// prefixVariance[i] = sum of per-position max-channel-variance for positions [0..i).
+    /// </summary>
+    internal static float[] ComputeAxisVariancePrefixSum(SoaImage img, int axis, PrecomputedSrgb origSrgb)
+    {
+        int l = axis == 1 ? img.Width : img.Height;
+        int otherLen = axis == 1 ? img.Height : img.Width;
+        int w = img.Width;
+        float[][] srgbPlanes = [origSrgb.R, origSrgb.G, origSrgb.B, origSrgb.Alpha];
+        float[] prefixSum = new float[l + 1];
+
+        // Per-channel accumulators: [channel, position]
+        float[,] sum = new float[4, l];
+        float[,] sumSq = new float[4, l];
+
+        if (axis == 1)
+        {
+            // Per column x: accumulate across all rows y
+            for (int y = 0; y < otherLen; y++)
+            {
+                int rowOffset = y * w;
+                for (int x = 0; x < l; x++)
+                {
+                    int idx = rowOffset + x;
+                    for (int ch = 0; ch < 4; ch++)
+                    {
+                        float v = srgbPlanes[ch][idx];
+                        sum[ch, x] += v;
+                        sumSq[ch, x] += v * v;
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Per row y: accumulate across all columns x
+            for (int y = 0; y < l; y++)
+            {
+                int rowOffset = y * w;
+                for (int x = 0; x < otherLen; x++)
+                {
+                    int idx = rowOffset + x;
+                    for (int ch = 0; ch < 4; ch++)
+                    {
+                        float v = srgbPlanes[ch][idx];
+                        sum[ch, y] += v;
+                        sumSq[ch, y] += v * v;
+                    }
+                }
+            }
+        }
+
+        // Build prefix sum of max-per-channel variance
+        float invN = 1f / otherLen;
+        float running = 0f;
+        for (int i = 0; i < l; i++)
+        {
+            float maxVar = 0f;
+            for (int ch = 0; ch < 4; ch++)
+            {
+                float m = sum[ch, i] * invN;
+                float mSq = sumSq[ch, i] * invN;
+                float var = mSq - m * m; // Var = E[x^2] - E[x]^2
+                if (var > maxVar) maxVar = var;
+            }
+            running += maxVar;
+            prefixSum[i + 1] = running;
+        }
+
+        return prefixSum;
+    }
+
+    /// <summary>O(1) variance lookup for interval [b, e) using prefix-sum table.</summary>
+    internal static float VarianceForInterval(float[] prefixSum, int b, int e)
+    {
+        int len = e - b;
+        if (len <= 0) return 0f;
+        return (prefixSum[e] - prefixSum[b]) / len;
+    }
+
+    /// <summary>
+    /// Computes global variance of the entire image in sRGB space, max across channels.
+    /// Used to derive an adaptive variance threshold.
+    /// </summary>
+    internal static float ComputeGlobalVariance(SoaImage img, PrecomputedSrgb origSrgb)
+    {
+        int n = img.PixelCount;
+        float[][] planes = [origSrgb.R, origSrgb.G, origSrgb.B, origSrgb.Alpha];
+        float maxVar = 0f;
+
+        for (int ch = 0; ch < 4; ch++)
+        {
+            int vecLen = Vector<float>.Count;
+            int vecEnd = (n / vecLen) * vecLen;
+            double dSum = 0, dSumSq = 0;
+            var vSum = Vector<float>.Zero;
+            var vSumSq = Vector<float>.Zero;
+
+            for (int i = 0; i < vecEnd; i += vecLen)
+            {
+                var v = new Vector<float>(planes[ch], i);
+                vSum += v;
+                vSumSq += v * v;
+            }
+            for (int j = 0; j < vecLen; j++)
+            {
+                dSum += vSum[j];
+                dSumSq += vSumSq[j];
+            }
+            for (int i = vecEnd; i < n; i++)
+            {
+                float v = planes[ch][i];
+                dSum += v;
+                dSumSq += v * v;
+            }
+
+            double mean = dSum / n;
+            double meanSq = dSumSq / n;
+            float variance = (float)(meanSq - mean * mean);
+            if (variance > maxVar) maxVar = variance;
+        }
+
+        return maxVar;
+    }
+
+    /// <summary>
+    /// Adaptive variance threshold: K * globalVariance, with a floor of 0.01.
+    /// K = 3.0 by design.
+    /// </summary>
+    internal static float ComputeVarianceThreshold(float globalVariance, float k = 3.0f, float floor = 0.01f)
+    {
+        float threshold = k * globalVariance;
+        return Math.Max(threshold, floor);
+    }
+
+    /// <summary>
+    /// Detects if an axis is noisy (incompressible) by checking adjacent-position
+    /// squared-differences. For noise, adjacent positions differ significantly.
+    /// For smooth/gradient images, adjacent positions are similar.
+    /// </summary>
+    private static bool DetectNoisyAxis(SoaImage img, int axis, PrecomputedSrgb origSrgb,
+        int l, int w, float varianceThreshold)
+    {
+        // For axis=1 (X): compare adjacent columns x and x+1, averaged over all rows
+        // For axis=0 (Y): compare adjacent rows y and y+1, averaged over all columns
+        float[][] planes = [origSrgb.R, origSrgb.G, origSrgb.B, origSrgb.Alpha];
+        int otherLen = axis == 1 ? img.Height : img.Width;
+        float invOther = 1f / otherLen;
+
+        // Compute mean squared-difference between adjacent positions for each channel
+        float maxAdjDiff = 0f;
+        for (int ch = 0; ch < 4; ch++)
+        {
+            float sumSqDiff = 0f;
+            int count = 0;
+            for (int pos = 0; pos < l - 1; pos++)
+            {
+                for (int o = 0; o < otherLen; o++)
+                {
+                    int idx1 = axis == 1 ? o * w + pos : pos * w + o;
+                    int idx2 = axis == 1 ? o * w + pos + 1 : (pos + 1) * w + o;
+                    float diff = planes[ch][idx1] - planes[ch][idx2];
+                    sumSqDiff += diff * diff;
+                    count++;
+                }
+            }
+            float avgSqDiff = count > 0 ? sumSqDiff / count : 0f;
+            if (avgSqDiff > maxAdjDiff) maxAdjDiff = avgSqDiff;
+        }
+
+        // If max adjacent squared-diff is below 50% of variance threshold, the axis is smooth
+        // (For gradient: adjacent rows are identical → adjDiff ≈ 0)
+        // (For noise: adjacent rows differ a lot → adjDiff ≈ 2 * per-position variance)
+        return maxAdjDiff > varianceThreshold * 0.5f;
+    }
+
     /// <summary>
     /// Exhaustive search over all (b, e) intervals within [margin, L-margin).
     /// </summary>
@@ -246,6 +427,18 @@ public static class Search1D
             origSrgb.B[i] = ColorSpace.LinearToSrgbByte(img.B[i]) / 255f;
         }
 
+        // Precompute variance prefix-sum table for this axis
+        float[] prefixVariance = ComputeAxisVariancePrefixSum(img, axis, origSrgb);
+        float globalVariance = ComputeGlobalVariance(img, origSrgb);
+        float varianceThreshold = ComputeVarianceThreshold(globalVariance);
+
+        // Detect noisy axis: if adjacent positions have high squared-difference
+        // consistently (noise pattern), the axis is incompressible via box-downsampling.
+        // This checks between-position variation (not within-position variance),
+        // which correctly identifies gradients (low adjacent-diff) vs noise (high adjacent-diff).
+        if (DetectNoisyAxis(img, axis, origSrgb, l, w, varianceThreshold))
+            return null;
+
         // Allocate recon once, pre-filled with original data
         var recon = SoaImage.Create(w, h);
         Buffer.BlockCopy(img.R, 0, recon.R, 0, pixelCount * sizeof(float));
@@ -263,14 +456,20 @@ public static class Search1D
         {
             if (len - 2 <= bestSaving) break;
             int maxN = len / 2;
+            bool anyTryNPassed = false;
 
             for (int b = loBound; b + len <= hiBound; b++)
             {
                 int e = b + len;
 
+                // Variance pre-filter: skip intervals with too much high-frequency content
+                float intervalVariance = VarianceForInterval(prefixVariance, b, e);
+                if (intervalVariance > varianceThreshold) continue;
+
                 // Quick reject
                 if (!TryN(img, b, e, maxN, threshold, axis, recon, scratch, origSrgb)) continue;
 
+                anyTryNPassed = true;
                 int lo = 2, hi = maxN - 1;
                 int foundN = maxN;
                 while (lo <= hi)
@@ -295,6 +494,10 @@ public static class Search1D
                     if (foundN == 2) break;
                 }
             }
+
+            // Early termination: if len=4 completed with zero passing TryN, the image
+            // is fully incompressible — no need to test remaining shorter lengths
+            if (len == 4 && !anyTryNPassed) return null;
         }
 
         return best;
