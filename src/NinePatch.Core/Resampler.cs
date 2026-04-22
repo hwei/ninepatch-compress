@@ -48,13 +48,44 @@ public static class Resampler
         int dstH = axis == 0 ? dstLen : srcH;
         var dst = new float[dstW * dstH];
 
+        ApplyBoxFilter(weights, src, srcW, srcH, dst, dstW, dstH, axis);
+        return dst;
+    }
+
+    /// <summary>Box-filter downsample writing into a pre-allocated destination buffer.</summary>
+    public static void Downsample1D(ReadOnlySpan<float> src, int srcW, int srcH, int dstLen, int axis, Span<float> dst)
+    {
+        int srcLen = axis == 1 ? srcW : srcH;
+        if (dstLen == srcLen)
+        {
+            src.CopyTo(dst);
+            return;
+        }
+
+        int dstW = axis == 1 ? dstLen : srcW;
+        int dstH = axis == 0 ? dstLen : srcH;
+        if (dst.Length < dstW * dstH)
+            throw new ArgumentException("Destination buffer too small");
+
+        var weights = BuildBoxWeights(srcLen, dstLen);
+        ApplyBoxFilter(weights, src, srcW, srcH, dst, dstW, dstH, axis);
+    }
+
+    private static void ApplyBoxFilter(
+        float[,] weights, ReadOnlySpan<float> src, int srcW, int srcH,
+        Span<float> dst, int dstW, int dstH, int axis)
+    {
+        int srcLen = axis == 1 ? srcW : srcH;
+        int dstLen = axis == 1 ? dstW : dstH;
+        int otherLen = axis == 1 ? srcH : srcW;
+
         for (int d = 0; d < dstLen; d++)
         {
             for (int s = 0; s < srcLen; s++)
             {
                 float w = weights[d, s];
                 if (w == 0) continue;
-                for (int o = 0; o < (axis == 1 ? srcH : srcW); o++)
+                for (int o = 0; o < otherLen; o++)
                 {
                     int si = axis == 1 ? o * srcW + s : s * srcW + o;
                     int di = axis == 1 ? o * dstW + d : d * dstW + o;
@@ -62,7 +93,6 @@ public static class Resampler
                 }
             }
         }
-        return dst;
     }
 
     /// <summary>Bilinear upsample a single channel along axis (0=Y, 1=X) with half-pixel center.</summary>
@@ -72,10 +102,38 @@ public static class Resampler
         if (dstLen == srcLen)
             return src.ToArray();
 
-        int otherLen = axis == 1 ? srcH : srcW;
         int dstW = axis == 1 ? dstLen : srcW;
         int dstH = axis == 0 ? dstLen : srcH;
         var dst = new float[dstW * dstH];
+
+        ApplyBilinearUpsample(src, srcW, srcH, dst, dstW, dstH, axis, dstLen);
+        return dst;
+    }
+
+    /// <summary>Bilinear upsample writing into a pre-allocated destination buffer.</summary>
+    public static void Upsample1D(ReadOnlySpan<float> src, int srcW, int srcH, int dstLen, int axis, Span<float> dst)
+    {
+        int srcLen = axis == 1 ? srcW : srcH;
+        if (dstLen == srcLen)
+        {
+            src.CopyTo(dst);
+            return;
+        }
+
+        int dstW = axis == 1 ? dstLen : srcW;
+        int dstH = axis == 0 ? dstLen : srcH;
+        if (dst.Length < dstW * dstH)
+            throw new ArgumentException("Destination buffer too small");
+
+        ApplyBilinearUpsample(src, srcW, srcH, dst, dstW, dstH, axis, dstLen);
+    }
+
+    private static void ApplyBilinearUpsample(
+        ReadOnlySpan<float> src, int srcW, int srcH,
+        Span<float> dst, int dstW, int dstH, int axis, int dstLen)
+    {
+        int srcLen = axis == 1 ? srcW : srcH;
+        int otherLen = axis == 1 ? srcH : srcW;
 
         // Precompute interpolation params
         var ix0 = new int[dstLen];
@@ -135,6 +193,5 @@ public static class Resampler
                 }
             }
         }
-        return dst;
     }
 }

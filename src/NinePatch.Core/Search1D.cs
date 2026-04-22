@@ -5,18 +5,19 @@ public readonly record struct SearchResult1D(int Begin, int End, int N);
 public static class Search1D
 {
     /// <summary>
-    /// Downsample region [b..e] along axis to n pixels, upsample back.
-    /// Returns full-image-sized SoaImage with unchanged pixels outside [b..e].
+    /// Downsample region [b..e] along axis to n pixels, upsample back, measure error.
+    /// Allocates per-channel working buffers internally; recon buffer is reused (caller ensures
+    /// it's fresh).
     /// </summary>
-    private static SoaImage Compress1D(SoaImage img, int b, int e, int n, int axis)
+    private static bool TryN(
+        SoaImage img, int b, int e, int n, float threshold, int axis, SoaImage recon)
     {
         int len = e - b;
         int w = img.Width;
         int h = img.Height;
-        var dst = SoaImage.Create(w, h);
 
         float[][] srcChannels = [img.R, img.G, img.B, img.A];
-        float[][] dstChannels = [dst.R, dst.G, dst.B, dst.A];
+        float[][] dstChannels = [recon.R, recon.G, recon.B, recon.A];
 
         for (int ch = 0; ch < 4; ch++)
         {
@@ -25,7 +26,7 @@ public static class Search1D
 
             if (axis == 1)
             {
-                // Extract X region [b, e), row-major: each row is contiguous
+                // Extract X region [b, e)
                 var region = new float[len * h];
                 for (int y = 0; y < h; y++)
                     Buffer.BlockCopy(srcCh, (y * w + b) * 4, region, y * len * 4, len * 4);
@@ -33,20 +34,20 @@ public static class Search1D
                 float[] down = Resampler.Downsample1D(region, len, h, n, 1);
                 float[] up = Resampler.Upsample1D(down, n, h, len, 1);
 
-                // Left pad
+                // Left pad: copy unchanged
                 for (int y = 0; y < h; y++)
                     Buffer.BlockCopy(srcCh, y * w * 4, dstCh, y * w * 4, b * 4);
                 // Upsampled region
                 for (int y = 0; y < h; y++)
                     Buffer.BlockCopy(up, y * len * 4, dstCh, (y * w + b) * 4, len * 4);
-                // Right pad
+                // Right pad: copy unchanged
                 int rightBytes = (w - e) * 4;
                 for (int y = 0; y < h; y++)
                     Buffer.BlockCopy(srcCh, (y * w + e) * 4, dstCh, (y * w + e) * 4, rightBytes);
             }
             else
             {
-                // Extract Y region [b, e), rows are contiguous in row-major
+                // Extract Y region [b, e)
                 var region = new float[w * len];
                 for (int y = b; y < e; y++)
                     Buffer.BlockCopy(srcCh, y * w * 4, region, (y - b) * w * 4, w * 4);
@@ -58,28 +59,14 @@ public static class Search1D
                 {
                     int rowBytes = w * 4;
                     if (y < b || y >= e)
-                    {
-                        // Pad region: copy unchanged
                         Buffer.BlockCopy(srcCh, y * w * 4, dstCh, y * w * 4, rowBytes);
-                    }
                     else
-                    {
-                        // Stretch region: copy from upsampled (row (y-b))
                         Buffer.BlockCopy(up, (y - b) * w * 4, dstCh, y * w * 4, rowBytes);
-                    }
                 }
             }
         }
 
-        return dst;
-    }
-
-    private static (float error, bool passes) TryN(
-        SoaImage img, int b, int e, int n, float threshold, int axis)
-    {
-        SoaImage recon = Compress1D(img, b, e, n, axis);
-        float err = ErrorMetric.MaxError(img, recon);
-        return (err, err <= threshold);
+        return ErrorMetric.PassesThreshold(img, recon, threshold);
     }
 
     /// <summary>
@@ -103,6 +90,9 @@ public static class Search1D
         int hiBound = l - margin;
         if (hiBound - loBound < 4) return null;
 
+        // Allocate recon SoaImage once and reuse it for every MeasureError call.
+        var recon = SoaImage.Create(img.Width, img.Height);
+
         int bestSaving = -1;
         SearchResult1D? best = null;
 
@@ -117,16 +107,14 @@ public static class Search1D
                 int e = b + len;
 
                 // Quick reject: if even the least aggressive N fails, skip.
-                var (_, okMax) = TryN(img, b, e, maxN, threshold, axis);
-                if (!okMax) continue;
+                if (!TryN(img, b, e, maxN, threshold, axis, recon)) continue;
 
                 int lo = 2, hi = maxN - 1;
                 int foundN = maxN;
                 while (lo <= hi)
                 {
                     int mid = (lo + hi) / 2;
-                    var (_, ok) = TryN(img, b, e, mid, threshold, axis);
-                    if (ok) { foundN = mid; hi = mid - 1; }
+                    if (TryN(img, b, e, mid, threshold, axis, recon)) { foundN = mid; hi = mid - 1; }
                     else lo = mid + 1;
                 }
 

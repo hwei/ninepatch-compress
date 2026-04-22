@@ -99,6 +99,68 @@ public static class ErrorMetric
         return maxErr;
     }
 
+    /// <summary>
+    /// Check if max error is within threshold. Returns early on first exceeding pixel.
+    /// Much faster than MaxError when the reconstruction has large errors.
+    /// </summary>
+    public static bool PassesThreshold(SoaImage original, SoaImage reconstructed, float threshold, bool alphaWeighted = true)
+    {
+        int n = original.PixelCount;
+        int vecLen = Vector<float>.Count;
+        int vecEnd = (n / vecLen) * vecLen;
+        var vZero = Vector<float>.Zero;
+
+        // --- Main SIMD loop: compute error per vector chunk, early-exit if any exceeds ---
+        for (int i = 0; i < vecEnd; i += vecLen)
+        {
+            var oA = new Vector<float>(original.A, i);
+            var rA = new Vector<float>(reconstructed.A, i);
+            var alphaWeight = alphaWeighted ? Vector.Max(oA, rA) : Vector<float>.One;
+
+            var rgbErr = ComputeRgbError(original.R, reconstructed.R, i, vecLen);
+            rgbErr = Vector.Max(rgbErr, ComputeRgbError(original.G, reconstructed.G, i, vecLen));
+            rgbErr = Vector.Max(rgbErr, ComputeRgbError(original.B, reconstructed.B, i, vecLen));
+            rgbErr *= alphaWeight;
+            rgbErr = Vector.ConditionalSelect(Vector.LessThan(rgbErr, vZero), vZero, rgbErr);
+
+            // Unroll the vector to check each element
+            for (int j = 0; j < vecLen; j++)
+                if (rgbErr[j] > threshold) return false;
+        }
+
+        // --- Scalar tail ---
+        for (int i = vecEnd; i < n; i++)
+        {
+            float rErr = SrgbDiffScalar(original.R[i], reconstructed.R[i]);
+            float gErr = SrgbDiffScalar(original.G[i], reconstructed.G[i]);
+            float bErr = SrgbDiffScalar(original.B[i], reconstructed.B[i]);
+            if (alphaWeighted)
+            {
+                float w = MathF.Max(original.A[i], reconstructed.A[i]);
+                rErr *= w; gErr *= w; bErr *= w;
+            }
+            if (rErr > threshold || gErr > threshold || bErr > threshold)
+                return false;
+        }
+
+        // --- Alpha error ---
+        for (int i = 0; i < vecEnd; i += vecLen)
+        {
+            var oA = new Vector<float>(original.A, i);
+            var rA = new Vector<float>(reconstructed.A, i);
+            var aErr = Vector.Abs(oA - rA) * new Vector<float>(255f);
+            for (int j = 0; j < vecLen; j++)
+                if (aErr[j] > threshold) return false;
+        }
+        for (int i = vecEnd; i < n; i++)
+        {
+            float aErr = MathF.Abs(original.A[i] - reconstructed.A[i]) * 255f;
+            if (aErr > threshold) return false;
+        }
+
+        return true;
+    }
+
     private static Vector<float> ComputeRgbError(
         float[] orig, float[] recon, int offset, int vecLen)
     {
