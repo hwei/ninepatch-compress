@@ -58,32 +58,39 @@ Final test: max over all pixels <= threshold.
 Input: linear RGBA image of shape (H, W, 4), threshold, margin.
 Output: (xb, xe, Nx) or None.
 
-Pseudocode:
-  xb, xe = margin, W - margin
-  while xe - xb >= 4:
-      max_N = (xe - xb) // 2
-      # binary search smallest N in [2, max_N] passing threshold
-      N = binary_search_min_passing(xb, xe)
-      if N found:
-          return (xb, xe, N)
-      # shrink: compare full compress-reconstruct error for each side
-      # (using same TryN function as binary search, at max_N)
-      err_if_shrink_left  = try_compress(xb + step, xe, max_N).err
-      err_if_shrink_right = try_compress(xb, xe - step, max_N).err
-      if err_if_shrink_left < err_if_shrink_right:
-          xb += step
-      else:
-          xe -= step
-  return None
+Pseudocode (exhaustive over (b, e), binary search over N):
+  best_saving = -1
+  best = None
+  for L from (W - 2*margin) down to 4:
+      if L - 2 <= best_saving: break        # no remaining L can beat current best
+      max_N = L // 2
+      for b from margin to W - margin - L:
+          e = b + L
+          if not try_compress(b, e, max_N).ok: continue   # quick reject
+          N = binary_search_min_passing(b, e) in [2, max_N]
+          saving = L - N
+          if saving > best_saving:
+              best_saving = saving
+              best = (b, e, N)
+              if N == 2: break              # max saving for this L; break inner
+  return best
 
-Y pass: apply the same function to the transposed image.
+Y pass: apply the same function with axis swapped.
 
-Notes on the shrink heuristic:
-- `step` defaults to 2 but should be configurable.
-- The current heuristic can be slow on images where one specific column
-  causes all the error (needs many shrink iterations). Consider: if shrink
-  by `step` doesn't reduce error enough, double `step`.
-- Log every iteration for debugging.
+Notes:
+- Why exhaustive and not greedy shrink: the previous greedy shrink starts
+  from [margin, L-margin) and contracts one side per iteration. It cannot
+  jump over a hard edge in the middle of the image. For images with two
+  separately compressible regions per axis (e.g. two icons side by side
+  with a vertical seam), the greedy algorithm fails to find either region
+  and falls back to identity. Exhaustive (b, e) enumeration finds the best
+  single region by construction.
+- Cost: for W=1024, the outer loop is at most W iterations, the inner up
+  to W positions, and each position costs 1 quick-reject verify + up to
+  log(W/2) binary-search verifies. With pruning, most images terminate
+  after finding one cheap valid interval. Optimization (precomputing
+  per-K bitmap of chunk-ok, curvature-based pruning) is deferred until a
+  real sample proves the current cost too high.
 
 ## Identity fallback for one-way compression
 

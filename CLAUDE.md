@@ -36,10 +36,16 @@ Target engine: FairyGUI. Nine-patch semantics:
   stretch region, no downsampling) so that one-way compression still works.
   Report 2D reconstruction error but do not iterate to fix it — we want
   to empirically observe how often independence breaks.
-- Each 1D pass uses strategy C: start from the largest possible interval
-  [margin, L-margin), binary-search minimal N in [2, (e-b)/2] that passes
-  threshold. If no N works, shrink the interval toward the side with higher
-  boundary error. Stop when interval < 4 or no valid N found.
+- Each 1D pass enumerates all intervals (b, e) in [margin, L-margin) and
+  for each one binary-searches the smallest N in [2, (e-b)/2] that passes
+  threshold. Picks the (b, e, N) with maximum saving = (e-b) - N. Outer
+  length loop iterates from max down and terminates once no remaining
+  length can beat the current best. Rationale: the earlier greedy shrink
+  could not jump over a mid-image hard edge, so images with two separately
+  compressible regions per axis returned identity fallback; exhaustive
+  enumeration finds the best single region. Optimization (per-K bitmap,
+  curvature pruning) is deferred until correctness is confirmed on real
+  samples.
 - Minimum savings threshold is user-tunable, default 30%. Below this,
   return "not worth compressing".
 
