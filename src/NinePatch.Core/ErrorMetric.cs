@@ -106,7 +106,7 @@ public static class ErrorMetric
         var rCh = new Vector<float>(recon, offset);
         var oSrgb = ColorSpace.LinearToSrgbSimd(oCh);
         var rSrgb = ColorSpace.LinearToSrgbSimd(rCh);
-        return Vector.Abs(oSrgb - rSrgb);
+        return Vector.Abs(oSrgb - rSrgb) * new Vector<float>(255f);
     }
 
     private static float SrgbDiffScalar(float o, float r)

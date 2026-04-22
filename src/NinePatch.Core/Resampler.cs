@@ -56,8 +56,8 @@ public static class Resampler
                 if (w == 0) continue;
                 for (int o = 0; o < (axis == 1 ? srcH : srcW); o++)
                 {
-                    int si = axis == 1 ? s * srcH + o : s * srcW + o;
-                    int di = axis == 1 ? d * dstH + o : d * dstW + o;
+                    int si = axis == 1 ? o * srcW + s : s * srcW + o;
+                    int di = axis == 1 ? o * dstW + d : d * dstW + o;
                     dst[di] += src[si] * w;
                 }
             }
@@ -94,7 +94,10 @@ public static class Resampler
             t[dx] = u - MathF.Floor(u);
         }
 
-        int vecLen = Vector<float>.Count;
+        // SIMD only works for axis=0 (Y) where adjacent pixels are contiguous.
+        // axis=1 (X) would need gather; fall back to scalar.
+        bool useSimd = axis == 0;
+        int vecLen = useSimd ? Vector<float>.Count : 1;
 
         for (int dx = 0; dx < dstLen; dx++)
         {
@@ -107,11 +110,11 @@ public static class Resampler
             for (int o = 0; o < otherLen;)
             {
                 int remain = otherLen - o;
-                if (remain >= vecLen)
+                if (useSimd && remain >= vecLen)
                 {
-                    int si0 = axis == 1 ? s0 * srcH + o : s0 * srcW + o;
-                    int si1 = axis == 1 ? s1 * srcH + o : s1 * srcW + o;
-                    int di = axis == 1 ? dx * dstH + o : dx * dstW + o;
+                    int si0 = s0 * srcW + o;
+                    int si1 = s1 * srcW + o;
+                    int di = dx * dstW + o;
 
                     var px0 = new Vector<float>(src.Slice(si0, vecLen));
                     var px1 = new Vector<float>(src.Slice(si1, vecLen));
@@ -122,12 +125,13 @@ public static class Resampler
                 }
                 else
                 {
-                    int si0 = axis == 1 ? s0 * srcH + o : s0 * srcW + o;
-                    int si1 = axis == 1 ? s1 * srcH + o : s1 * srcW + o;
-                    int di = axis == 1 ? dx * dstH + o : dx * dstW + o;
-                    for (int j = 0; j < remain; j++)
+                    int si0 = axis == 1 ? o * srcW + s0 : s0 * srcW + o;
+                    int si1 = axis == 1 ? o * srcW + s1 : s1 * srcW + o;
+                    int di = axis == 1 ? o * dstW + dx : dx * dstW + o;
+                    int batch = useSimd ? remain : 1;
+                    for (int j = 0; j < batch; j++)
                         dst[di + j] = src[si0 + j] * t0 + src[si1 + j] * t1;
-                    break;
+                    o += batch;
                 }
             }
         }
