@@ -6,7 +6,7 @@ namespace NinePatch.Core;
 /// Precomputed sRGB planes for the original image. Used by Search1D to avoid
 /// repeated LinearToSrgbSimd calls on the original (which never changes).
 /// </summary>
-public readonly record struct PrecomputedSrgb(
+internal readonly record struct PrecomputedSrgb(
     float[] R, float[] G, float[] B, float[] Alpha);
 
 /// <summary>
@@ -174,7 +174,7 @@ public static class ErrorMetric
     /// Overload accepting precomputed sRGB planes for the original image.
     /// RGB + Alpha are merged into a single early-exit pass.
     /// </summary>
-    public static bool PassesThreshold(
+    internal static bool PassesThreshold(
         PrecomputedSrgb origSrgb, SoaImage reconstructed, float threshold, bool alphaWeighted = true)
     {
         int n = reconstructed.PixelCount;
@@ -208,9 +208,9 @@ public static class ErrorMetric
         // --- Scalar tail ---
         for (int i = vecEnd; i < n; i++)
         {
-            float rErr = MathF.Abs(origSrgb.R[i] - ColorSpace.LinearToSrgbByte(reconstructed.R[i]) / 255f);
-            float gErr = MathF.Abs(origSrgb.G[i] - ColorSpace.LinearToSrgbByte(reconstructed.G[i]) / 255f);
-            float bErr = MathF.Abs(origSrgb.B[i] - ColorSpace.LinearToSrgbByte(reconstructed.B[i]) / 255f);
+            float rErr = MathF.Abs(origSrgb.R[i] - ColorSpace.LinearToSrgbByte(reconstructed.R[i]) / 255f) * 255f;
+            float gErr = MathF.Abs(origSrgb.G[i] - ColorSpace.LinearToSrgbByte(reconstructed.G[i]) / 255f) * 255f;
+            float bErr = MathF.Abs(origSrgb.B[i] - ColorSpace.LinearToSrgbByte(reconstructed.B[i]) / 255f) * 255f;
             float aErr = MathF.Abs(origSrgb.Alpha[i] - reconstructed.A[i]) * 255f;
             if (alphaWeighted)
             {
