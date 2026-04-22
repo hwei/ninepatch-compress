@@ -132,6 +132,18 @@ public static class ColorSpace
         return Vector.ConditionalSelect(below, lo, hi);
     }
 
+    /// <summary>Scalar linear→sRGB float [0,1] using the same polynomial as the SIMD path.</summary>
+    internal static float LinearToSrgbFloat(float linear)
+    {
+        if (linear <= 0.0031308f) return linear * 12.92f;
+        float p = linear * P5 + P4;
+        p = linear * p + P3;
+        p = linear * p + P2;
+        p = linear * p + P1;
+        p = linear * p + P0;
+        return 1.055f * p - 0.055f;
+    }
+
     // --- Scalar implementations for LUT init ---
 
     private static float SrgbToLinearScalar(float c)

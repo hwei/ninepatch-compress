@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace NinePatch.Core;
 
 public readonly record struct SearchResult1D(int Begin, int End, int N);
@@ -6,15 +8,29 @@ public static class Search1D
 {
     /// <summary>
     /// Scratch buffers allocated once in Run() and reused by TryN.
-    /// Also tracks the dirty region from the previous TryN call so we can
-    /// restore it to original data before the next TryN.
+    /// Tracks partial dirty state: only the portion actually written by the
+    /// previous TryN (which may have exited early) needs restoring.
     /// </summary>
     private sealed class ScratchBuffers
     {
         public float[] Region; // max w*h
         public float[] Down;   // max w*h
         public float[] Up;     // max w*h (same size as region)
-        public int DirtyB = -1, DirtyE = -1; // previous TryN's region
+
+        // Dirty tracking: [DirtyB..DirtyE) x [0..DirtySliceEnd) was written.
+        // For axis=1 (X): slice = row, range [0..H)
+        // For axis=0 (Y): slice = row range [b..e), tracked as absolute row indices
+        public int DirtyB = -1, DirtyE = -1;
+        public int DirtySliceEnd = 0; // exclusive: row index (axis=1) or row index (axis=0)
+
+        // Precomputed weights for current TryN
+        public Resampler.BoxWeightsPrecomputed BoxWeights;
+        public Resampler.BilinearParamsPrecomputed BilinearArgs;
+
+        // Row-level temp buffers (single row, max 1024)
+        public float[] SrcRow;  // source row buffer
+        public float[] DstRow;  // downsampled row buffer (max N)
+        public float[] UpRow;   // upsampled row buffer (max L)
 
         public ScratchBuffers(int width, int height)
         {
@@ -22,13 +38,13 @@ public static class Search1D
             Region = new float[size];
             Down = new float[size];
             Up = new float[size];
+            int maxDim = Math.Max(width, height);
+            SrcRow = new float[maxDim];
+            DstRow = new float[maxDim];
+            UpRow = new float[maxDim];
         }
     }
 
-    /// <summary>
-    /// Downsample region [b..e] along axis to n pixels, upsample back, measure error.
-    /// Before writing, restores the previous TryN's dirty region to original.
-    /// </summary>
     private static bool TryN(
         SoaImage img, int b, int e, int n, float threshold, int axis,
         SoaImage recon, ScratchBuffers scratch, PrecomputedSrgb origSrgb)
@@ -36,91 +52,168 @@ public static class Search1D
         int len = e - b;
         int w = img.Width;
         int h = img.Height;
-
-        int regionSize = axis == 1 ? len * h : w * len;
-        int downSize = axis == 1 ? n * h : w * n;
-        int upSize = regionSize;
-
-        float[] region = scratch.Region;
-        float[] down = scratch.Down;
-        float[] up = scratch.Up;
-
         float[][] srcChannels = [img.R, img.G, img.B, img.A];
         float[][] dstChannels = [recon.R, recon.G, recon.B, recon.A];
 
-        // Restore previous TryN's dirty region to original data, so only the
-        // current TryN's region differs from original when PassesThreshold runs.
+        // Restore previous TryN's dirty region
         if (scratch.DirtyB >= 0)
         {
             int db = scratch.DirtyB;
             int de = scratch.DirtyE;
+            int sliceEnd = scratch.DirtySliceEnd;
             if (axis == 1)
             {
                 int dirtyLen = de - db;
-                for (int ch = 0; ch < 4; ch++)
-                    for (int y = 0; y < h; y++)
-                        Buffer.BlockCopy(srcChannels[ch], (y * w + db) * 4, dstChannels[ch], (y * w + db) * 4, dirtyLen * 4);
+                for (int y = 0; y < sliceEnd; y++)
+                {
+                    int rowBytes = dirtyLen * 4;
+                    for (int ch = 0; ch < 4; ch++)
+                        Buffer.BlockCopy(srcChannels[ch], (y * w + db) * 4, dstChannels[ch], (y * w + db) * 4, rowBytes);
+                }
             }
             else
             {
-                for (int ch = 0; ch < 4; ch++)
-                    for (int y = db; y < de; y++)
-                        Buffer.BlockCopy(srcChannels[ch], y * w * 4, dstChannels[ch], y * w * 4, w * 4);
+                for (int y = db; y < de; y++)
+                {
+                    int rowBytes = w * 4;
+                    for (int ch = 0; ch < 4; ch++)
+                        Buffer.BlockCopy(srcChannels[ch], y * w * 4, dstChannels[ch], y * w * 4, rowBytes);
+                }
             }
         }
 
-        for (int ch = 0; ch < 4; ch++)
+        if (axis == 1)
         {
-            float[] srcCh = srcChannels[ch];
+            return TryN_X(b, e, len, n, w, h, threshold, srcChannels, dstChannels, recon, scratch, origSrgb);
+        }
+        else
+        {
+            return TryN_Y(b, e, len, n, w, h, threshold, srcChannels, dstChannels, recon, scratch, origSrgb);
+        }
+    }
 
-            if (axis == 1)
+    /// <summary>X-axis TryN: process row by row with early exit.</summary>
+    private static bool TryN_X(
+        int b, int e, int len, int n, int w, int h, float threshold,
+        float[][] srcChannels, float[][] dstChannels, SoaImage recon, ScratchBuffers scratch, PrecomputedSrgb origSrgb)
+    {
+        // Precompute weights once
+        scratch.BoxWeights = Resampler.BuildRowBoxWeights(len, n);
+        scratch.BilinearArgs = Resampler.BuildRowBilinearParams(n, len);
+        var boxWeights = scratch.BoxWeights;
+        var bilinearArgs = scratch.BilinearArgs;
+        var srcRow = scratch.SrcRow;
+        var dstRow = scratch.DstRow;
+        var upRow = scratch.UpRow;
+
+        for (int y = 0; y < h; y++)
+        {
+            // Process each channel for this row
+            for (int ch = 0; ch < 4; ch++)
             {
-                // Extract X region [b, e)
-                for (int y = 0; y < h; y++)
-                    Buffer.BlockCopy(srcCh, (y * w + b) * 4, region, y * len * 4, len * 4);
+                // Extract source row [b..e)
+                Buffer.BlockCopy(srcChannels[ch], (y * w + b) * 4, srcRow, 0, len * 4);
 
-                System.Array.Clear(down, 0, downSize);
-                Resampler.Downsample1D(region.AsSpan(0, regionSize), len, h, n, 1, down.AsSpan(0, downSize));
-                Resampler.Upsample1D(down.AsSpan(0, downSize), n, h, len, 1, up.AsSpan(0, upSize));
+                // Downsample + upsample this single row
+                Resampler.Downsample1DRow(srcRow.AsSpan(0, len), len, boxWeights, dstRow.AsSpan(0, n));
+                Resampler.Upsample1DRow(dstRow.AsSpan(0, n), n, bilinearArgs, upRow.AsSpan(0, len));
 
-                // Write upsampled region only
-                for (int y = 0; y < h; y++)
-                    Buffer.BlockCopy(up, y * len * 4, dstChannels[ch], (y * w + b) * 4, len * 4);
+                // Write reconstructed row back
+                Buffer.BlockCopy(upRow, 0, dstChannels[ch], (y * w + b) * 4, len * 4);
             }
-            else
+
+            // Early exit check on this row's [b..e) region
+            if (!ErrorMetric.PassesThresholdSliceX(origSrgb, recon, y, b, e, w, threshold))
             {
-                // Extract Y region [b, e)
-                for (int y = b; y < e; y++)
-                    Buffer.BlockCopy(srcCh, y * w * 4, region, (y - b) * w * 4, w * 4);
-
-                System.Array.Clear(down, 0, downSize);
-                Resampler.Downsample1D(region.AsSpan(0, regionSize), w, len, n, 0, down.AsSpan(0, downSize));
-                Resampler.Upsample1D(down.AsSpan(0, downSize), w, n, len, 0, up.AsSpan(0, upSize));
-
-                // Write upsampled region rows only
-                for (int y = b; y < e; y++)
-                    Buffer.BlockCopy(up, (y - b) * w * 4, dstChannels[ch], y * w * 4, w * 4);
+                scratch.DirtyB = b;
+                scratch.DirtyE = e;
+                scratch.DirtySliceEnd = y + 1;
+                return false;
             }
         }
 
         scratch.DirtyB = b;
         scratch.DirtyE = e;
+        scratch.DirtySliceEnd = h;
+        return true;
+    }
 
-        return ErrorMetric.PassesThreshold(origSrgb, recon, threshold);
+    /// <summary>Y-axis TryN: process column-block by column-block with early exit.</summary>
+    private static bool TryN_Y(
+        int b, int e, int len, int n, int w, int h, float threshold,
+        float[][] srcChannels, float[][] dstChannels, SoaImage recon, ScratchBuffers scratch, PrecomputedSrgb origSrgb)
+    {
+        // Precompute weights once
+        scratch.BoxWeights = Resampler.BuildRowBoxWeights(len, n);
+        scratch.BilinearArgs = Resampler.BuildRowBilinearParams(n, len);
+        var boxWeights = scratch.BoxWeights;
+        var bilinearArgs = scratch.BilinearArgs;
+
+        // For Y axis: box-down is along rows (each row independently), but the
+        // data is non-contiguous. We extract a column region per row, downsample
+        // along the column axis, then upsample back.
+        //
+        // Strategy: process the full column [x0..x0+vecLen) for all rows at once
+        // using existing Downsample1D/Upsample1D with srcW=vecLen, srcH=len.
+        // This is the simplest approach that keeps SIMD working on the "other" dimension.
+
+        int vecLen = Vector<float>.Count;
+        int numBlocks = (w + vecLen - 1) / vecLen;
+
+        for (int blockIdx = 0; blockIdx < numBlocks; blockIdx++)
+        {
+            int x0 = blockIdx * vecLen;
+            int blockW = Math.Min(vecLen, w - x0);
+
+            // Extract region [b..e) x [x0..x0+blockW) for each channel
+            int regionW = blockW;
+            int regionH = len;
+            int regionSize = regionW * regionH;
+
+            for (int ch = 0; ch < 4; ch++)
+            {
+                // Extract: src row y, cols x0..x0+blockW -> region row (y-b), cols 0..blockW
+                for (int y = b; y < e; y++)
+                {
+                    Buffer.BlockCopy(srcChannels[ch], (y * w + x0) * 4,
+                        scratch.Region, ((y - b) * regionW) * 4, blockW * 4);
+                }
+
+                int downSize = regionW * n;
+                int upSize = regionSize;
+
+                System.Array.Clear(scratch.Down, 0, downSize);
+                Resampler.Downsample1D(scratch.Region.AsSpan(0, regionSize), regionW, regionH, n, 0,
+                    scratch.Down.AsSpan(0, downSize));
+                Resampler.Upsample1D(scratch.Down.AsSpan(0, downSize), regionW, n, len, 0,
+                    scratch.Up.AsSpan(0, upSize));
+
+                // Write back to recon
+                for (int y = b; y < e; y++)
+                {
+                    Buffer.BlockCopy(scratch.Up, ((y - b) * regionW) * 4,
+                        dstChannels[ch], (y * w + x0) * 4, blockW * 4);
+                }
+            }
+
+            // Early exit: check this column block across all rows [b..e)
+            if (!ErrorMetric.PassesThresholdSliceY(origSrgb, recon, b, e, x0, blockW, w, threshold))
+            {
+                scratch.DirtyB = b;
+                scratch.DirtyE = e;
+                scratch.DirtySliceEnd = e; // all rows [b..e) were written
+                return false;
+            }
+        }
+
+        scratch.DirtyB = b;
+        scratch.DirtyE = e;
+        scratch.DirtySliceEnd = e;
+        return true;
     }
 
     /// <summary>
     /// Exhaustive search over all (b, e) intervals within [margin, L-margin).
-    /// For each interval, binary-search the smallest N in [2, (e-b)/2] that passes
-    /// the threshold. Return the interval with maximum saving = (e-b) - N.
-    ///
-    /// Pruning:
-    ///   1. Outer loop iterates length L from max down. Since max possible saving
-    ///      at length L is L - 2, stop once L - 2 <= bestSaving.
-    ///   2. For each (b, e), first probe N = L/2 (least aggressive). If that fails,
-    ///      no smaller N can pass, so skip the binary search entirely.
-    ///   3. If N = 2 is found (saving = L - 2, the max for this L), break the
-    ///      inner b-loop immediately and re-check the outer termination.
     /// </summary>
     public static SearchResult1D? Run(
         SoaImage img, int axis, float threshold, int margin = 0)
@@ -133,7 +226,7 @@ public static class Search1D
         int w = img.Width;
         int h = img.Height;
 
-        // Precompute original sRGB planes — reused across all TryN calls.
+        // Precompute original sRGB planes
         int pixelCount = w * h;
         var origSrgb = new PrecomputedSrgb(
             R: new float[pixelCount],
@@ -165,9 +258,7 @@ public static class Search1D
             origSrgb.B[i] = ColorSpace.LinearToSrgbByte(img.B[i]) / 255f;
         }
 
-        // Allocate recon once, pre-filled with original data.
-        // TryN only overwrites the region portion; pad regions remain from original.
-        // Before each TryN, the previous TryN's region is restored to original.
+        // Allocate recon once, pre-filled with original data
         var recon = SoaImage.Create(w, h);
         Buffer.BlockCopy(img.R, 0, recon.R, 0, pixelCount * sizeof(float));
         Buffer.BlockCopy(img.G, 0, recon.G, 0, pixelCount * sizeof(float));
@@ -189,7 +280,7 @@ public static class Search1D
             {
                 int e = b + len;
 
-                // Quick reject: if even the least aggressive N fails, skip.
+                // Quick reject
                 if (!TryN(img, b, e, maxN, threshold, axis, recon, scratch, origSrgb)) continue;
 
                 int lo = 2, hi = maxN - 1;
@@ -213,7 +304,7 @@ public static class Search1D
                 {
                     bestSaving = saving;
                     best = new SearchResult1D(b, e, foundN);
-                    if (foundN == 2) break; // max saving for this L; no sibling can beat it
+                    if (foundN == 2) break;
                 }
             }
         }
