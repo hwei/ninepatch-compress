@@ -143,19 +143,11 @@ public static class Search1D
         int b, int e, int len, int n, int w, int h, float threshold,
         float[][] srcChannels, float[][] dstChannels, SoaImage recon, ScratchBuffers scratch, PrecomputedSrgb origSrgb)
     {
-        // Precompute weights once
+        // Precompute weights once — used by column-resample functions
         scratch.BoxWeights = Resampler.BuildRowBoxWeights(len, n);
         scratch.BilinearArgs = Resampler.BuildRowBilinearParams(n, len);
         var boxWeights = scratch.BoxWeights;
         var bilinearArgs = scratch.BilinearArgs;
-
-        // For Y axis: box-down is along rows (each row independently), but the
-        // data is non-contiguous. We extract a column region per row, downsample
-        // along the column axis, then upsample back.
-        //
-        // Strategy: process the full column [x0..x0+vecLen) for all rows at once
-        // using existing Downsample1D/Upsample1D with srcW=vecLen, srcH=len.
-        // This is the simplest approach that keeps SIMD working on the "other" dimension.
 
         int vecLen = Vector<float>.Count;
         int numBlocks = (w + vecLen - 1) / vecLen;
@@ -165,14 +157,13 @@ public static class Search1D
             int x0 = blockIdx * vecLen;
             int blockW = Math.Min(vecLen, w - x0);
 
-            // Extract region [b..e) x [x0..x0+blockW) for each channel
+            // Extract region [b..e) x [x0..x0+blockW) into contiguous buffer
             int regionW = blockW;
             int regionH = len;
             int regionSize = regionW * regionH;
 
             for (int ch = 0; ch < 4; ch++)
             {
-                // Extract: src row y, cols x0..x0+blockW -> region row (y-b), cols 0..blockW
                 for (int y = b; y < e; y++)
                 {
                     Buffer.BlockCopy(srcChannels[ch], (y * w + x0) * 4,
@@ -182,13 +173,11 @@ public static class Search1D
                 int downSize = regionW * n;
                 int upSize = regionSize;
 
-                System.Array.Clear(scratch.Down, 0, downSize);
-                Resampler.Downsample1D(scratch.Region.AsSpan(0, regionSize), regionW, regionH, n, 0,
-                    scratch.Down.AsSpan(0, downSize));
-                Resampler.Upsample1D(scratch.Down.AsSpan(0, downSize), regionW, n, len, 0,
-                    scratch.Up.AsSpan(0, upSize));
+                Resampler.Downsample1DCol(scratch.Region.AsSpan(0, regionSize), regionH, regionW,
+                    boxWeights, scratch.Down.AsSpan(0, downSize));
+                Resampler.Upsample1DCol(scratch.Down.AsSpan(0, downSize), n, regionW,
+                    bilinearArgs, scratch.Up.AsSpan(0, upSize));
 
-                // Write back to recon
                 for (int y = b; y < e; y++)
                 {
                     Buffer.BlockCopy(scratch.Up, ((y - b) * regionW) * 4,
@@ -196,12 +185,11 @@ public static class Search1D
                 }
             }
 
-            // Early exit: check this column block across all rows [b..e)
             if (!ErrorMetric.PassesThresholdSliceY(origSrgb, recon, b, e, x0, blockW, w, threshold))
             {
                 scratch.DirtyB = b;
                 scratch.DirtyE = e;
-                scratch.DirtySliceEnd = e; // all rows [b..e) were written
+                scratch.DirtySliceEnd = e;
                 return false;
             }
         }

@@ -370,4 +370,101 @@ public static class Resampler
             }
         }
     }
+
+    /// <summary>
+    /// Column-block box downsample using precomputed weights.
+    /// srcRegion is contiguous [srcH x regionW] row-major, where srcH = len.
+    /// Applies weights[d, s] across rows with SIMD over regionW columns.
+    /// </summary>
+    internal static void Downsample1DCol(
+        ReadOnlySpan<float> srcRegion, int srcH, int regionW,
+        BoxWeightsPrecomputed weights, Span<float> dst)
+    {
+        int dstLen = weights.SrcStart.Length;
+        var w = weights.Weights;
+        var starts = weights.SrcStart;
+        var ends = weights.SrcEnd;
+        int maxSpan = weights.MaxSpan;
+        int vecLen = Vector<float>.Count;
+
+        for (int d = 0; d < dstLen; d++)
+        {
+            int s0 = starts[d];
+            int s1 = ends[d];
+            int offset = d * maxSpan;
+
+            for (int x = 0; x < regionW;)
+            {
+                int remain = regionW - x;
+                if (remain >= vecLen)
+                {
+                    var acc = Vector<float>.Zero;
+                    for (int s = s0; s < s1; s++)
+                    {
+                        var val = new Vector<float>(srcRegion.Slice(s * regionW + x, vecLen));
+                        acc += val * w[offset + (s - s0)];
+                    }
+                    for (int j = 0; j < vecLen; j++)
+                        dst[d * regionW + x + j] = acc[j];
+                    x += vecLen;
+                }
+                else
+                {
+                    float sum = 0;
+                    for (int s = s0; s < s1; s++)
+                        sum += srcRegion[s * regionW + x] * w[offset + (s - s0)];
+                    dst[d * regionW + x] = sum;
+                    x++;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Column-block bilinear upsample using precomputed params.
+    /// dst buffer is contiguous [dstH x regionW] row-major.
+    /// </summary>
+    internal static void Upsample1DCol(
+        ReadOnlySpan<float> src, int srcLen, int regionW,
+        BilinearParamsPrecomputed args, Span<float> dst)
+    {
+        int dstLen = args.Ix0.Length;
+        var ix0 = args.Ix0;
+        var ix1 = args.Ix1;
+        var t = args.T;
+        int vecLen = Vector<float>.Count;
+
+        for (int d = 0; d < dstLen; d++)
+        {
+            float t0 = 1f - t[d];
+            float t1 = t[d];
+            int s0 = ix0[d];
+            int s1 = ix1[d];
+            var vt0 = new Vector<float>(t0);
+            var vt1 = new Vector<float>(t1);
+            int stride0 = s0 * regionW;
+            int stride1 = s1 * regionW;
+            int dStride = d * regionW;
+
+            for (int x = 0; x < regionW;)
+            {
+                int remain = regionW - x;
+                if (remain >= vecLen)
+                {
+                    var p0 = new Vector<float>(src.Slice(stride0 + x, vecLen));
+                    var p1 = new Vector<float>(src.Slice(stride1 + x, vecLen));
+                    var result = p0 * vt0 + p1 * vt1;
+                    for (int j = 0; j < vecLen; j++)
+                        dst[dStride + x + j] = result[j];
+                    x += vecLen;
+                }
+                else
+                {
+                    for (int j = 0; j < remain; j++)
+                        dst[dStride + x + j] = src[stride0 + x + j] * t0 + src[stride1 + x + j] * t1;
+                    x += remain;
+                }
+            }
+        }
+    }
 }

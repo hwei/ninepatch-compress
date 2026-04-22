@@ -44,15 +44,15 @@
 
 ## 7. 性能验证
 
-- [ ] 7.1 在 bench 重跑 `img_hero_pic_201_1.png`，记录 "after" wall-clock，与 "before" 对比
-- [ ] 7.2 目标：hard 图（435×511）< 5s；X 轴 8s，Y 轴 25s — 未完全达成
-- [ ] 7.3 在 bench 跑现有 easy 图（hgrad, rounded_panel）确认无性能回退（hgrad: 2180→1133ms, rounded: 654→19ms X, 589→62ms Y）
-- [ ] 7.4 补跑一张 1024 量级图
+- [x] 7.1 在 bench 重跑 `img_hero_pic_201_1.png`，记录 "after" wall-clock：SearchX 8200ms，SearchY 19000ms（vs before: X 8000ms，Y 25000ms）
+- [x] 7.2 目标：hard 图 < 5s — **部分达成**。X 轴仍 ~8s，Y 轴 25s→19s（-24%）。根因：noise 图 ~94k 次 TryN 几乎全部在 block 0 早退，剩余时间来自每次 TryN 的固定开销（extract/resample/check）。自底向上 + fail bitmap 剪枝是下一步方向。
+- [x] 7.3 在 bench 跑现有 easy 图确认无性能回退：hgrad X 1144ms/ Y 7ms，rounded X 15ms/ Y 45ms
+- [ ] 7.4 补跑一张 1024 量级图（推迟至 variance pre-filter change）
 
 ## 8. 收尾
 
-- [ ] 8.1 把 before/after 数字写进 PR 描述 / commit message
-- [ ] 8.2 清理任何临时 `progress.md` 或调试输出
-- [ ] 8.3 更新 memory `project_search1d_perf_next.md`
+- [x] 8.1 before/after 数字见 commit message
+- [x] 8.2 无临时调试输出需要清理
+- [x] 8.3 更新 memory `project_search1d_perf_progress.md`
 - [ ] 8.4 跑 `openspec validate search1d-row-early-exit --strict`
-- [ ] 8.5 提交 commit
+- [x] 8.5 提交 commit
