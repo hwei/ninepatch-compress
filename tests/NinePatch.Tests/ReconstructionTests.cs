@@ -84,6 +84,46 @@ public class ReconstructionTests
         Assert.True(err <= 0.01f, $"2D error = {err} for manual nine-patch");
     }
 
+    [Fact]
+    public void Compress2D_Reconstruct_Roundtrip_OneWayIdentityY()
+    {
+        // Verify Compress2D/ReconstructStretched tolerate identity in one axis.
+        int w = 80, h = 60;
+        byte[] img = CreateHGradientU8(w, h);
+        SoaImage imgLinear = ColorSpace.RgbaU8ToLinear(img, w, h);
+
+        // X compressed, Y identity
+        var resX = new SearchResult1D(20, 60, 8);
+        var resY = new SearchResult1D(0, h, h);
+
+        var (compressed, meta) = Compressor.Compress2D(imgLinear, resX, resY);
+        SoaImage recon = Compressor.ReconstructStretched(compressed, meta);
+
+        float err = ErrorMetric.MaxError(imgLinear, recon);
+        Assert.True(err <= 15f, $"2D error = {err} for one-way Y identity");
+    }
+
+    [Fact]
+    public void FullPipeline_OneWay_YAxisIdentity()
+    {
+        // Tall, narrow image: X is compressible (solid), Y has too few rows
+        // for Search1D to find a split (h=3 < 4), so Y falls back to identity.
+        int w = 100, h = 3;
+        byte[] img = CreateImageU8(w, h, 128, 128, 128, 255);
+
+        var result = NinePatchCompressor.Compress(img, w, h, threshold: 4.0, minSavings: 0.0);
+
+        Assert.Equal(CompressStatus.Success, result.Status);
+        Assert.NotNull(result.Meta);
+        var meta = result.Meta.Value;
+        // Y should be identity
+        Assert.Equal(0, meta.Yb);
+        Assert.Equal(h, meta.Ye);
+        Assert.Equal(h, meta.Ny);
+        // X should have been compressed
+        Assert.True(meta.Nx < w, $"Nx={meta.Nx} should be < {w}");
+    }
+
     private static byte[] CreateImageU8(int w, int h, byte r, byte g, byte b, byte a)
     {
         var img = new byte[w * h * 4];

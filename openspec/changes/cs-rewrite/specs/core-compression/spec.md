@@ -58,6 +58,12 @@ The system SHALL binary-search for the smallest compressed size N that meets err
 - **WHEN** no valid split exists even after shrinking interval
 - **THEN** system returns null (search_1d) or CompressStatus.NoValidSplit (compress)
 
+#### Scenario: One-way compression with identity fallback
+- **WHEN** a valid split exists in only one axis (X or Y)
+- **THEN** system uses the found split for that axis and falls back to identity
+  (`begin=0, end=full_len, N=full_len`) for the other axis
+- **AND** compression proceeds to savings check and reconstruction as normal
+
 #### Scenario: Shrink uses full compress-reconstruct error
 - **WHEN** binary search fails and interval needs shrinking
 - **THEN** system compares full 1D compress-reconstruct error on each side to decide shrink direction

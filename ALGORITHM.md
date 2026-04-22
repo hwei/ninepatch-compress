@@ -85,6 +85,13 @@ Notes on the shrink heuristic:
   by `step` doesn't reduce error enough, double `step`.
 - Log every iteration for debugging.
 
+## Identity fallback for one-way compression
+
+If `Search1D` returns `None` for a direction, that direction falls back to
+identity: the entire axis becomes the stretch region with no downsampling
+(`begin=0, end=L, N=L`).  This allows compression when only one axis is
+stretchable, which is common in UI textures (e.g. horizontal bars).
+
 ## Auto-retry with increasing margin
 
 When margin=0 and no valid split is found, the system automatically retries

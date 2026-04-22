@@ -363,12 +363,13 @@ public static class Compressor
             }
         }
 
-        if (resX is null || resY is null)
-            return CompressResult.Fail(CompressStatus.NoValidSplit, "No valid nine-patch split found");
+        // Identity fallback: allow one-way compression when only one axis is stretchable
+        SearchResult1D finalX = resX ?? new SearchResult1D(0, width, width);
+        SearchResult1D finalY = resY ?? new SearchResult1D(0, height, height);
 
         // Check savings
-        int w2 = resX.Value.N + resX.Value.Begin + (width - resX.Value.End);
-        int h2 = resY.Value.N + resY.Value.Begin + (height - resY.Value.End);
+        int w2 = finalX.N + finalX.Begin + (width - finalX.End);
+        int h2 = finalY.N + finalY.Begin + (height - finalY.End);
         double savingsPct = (1.0 - (double)(w2 * h2) / (width * height)) * 100.0;
 
         if (savingsPct < minSavings)
@@ -376,13 +377,13 @@ public static class Compressor
                 $"Savings {savingsPct:F1}% below minimum {minSavings}%");
 
         // Compress
-        var (compressed, meta) = Compress2D(imgLinear, resX.Value, resY.Value);
+        var (compressed, meta) = Compress2D(imgLinear, finalX, finalY);
 
         // Boundary errors
         meta = meta with
         {
-            ErrorX = BoundaryError(imgLinear, resX.Value.Begin, resX.Value.End, 1),
-            ErrorY = BoundaryError(imgLinear, resY.Value.Begin, resY.Value.End, 0)
+            ErrorX = BoundaryError(imgLinear, finalX.Begin, finalX.End, 1),
+            ErrorY = BoundaryError(imgLinear, finalY.Begin, finalY.End, 0)
         };
 
         // Reconstruct and measure 2D error

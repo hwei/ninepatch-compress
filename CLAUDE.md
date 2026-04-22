@@ -32,6 +32,8 @@ Target engine: FairyGUI. Nine-patch semantics:
 - Margin (min corner size) is user-tunable, default 0. margin=0 allows
   degenerating to pure stretch (no real nine-patch needed).
 - Search strategy: independent X and Y passes (NOT joint 2D search).
+  If one axis cannot be compressed, it falls back to identity (full-length
+  stretch region, no downsampling) so that one-way compression still works.
   Report 2D reconstruction error but do not iterate to fix it — we want
   to empirically observe how often independence breaks.
 - Each 1D pass uses strategy C: start from the largest possible interval
