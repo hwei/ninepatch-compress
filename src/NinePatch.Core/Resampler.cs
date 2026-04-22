@@ -67,8 +67,46 @@ public static class Resampler
         if (dst.Length < dstW * dstH)
             throw new ArgumentException("Destination buffer too small");
 
-        var weights = BuildBoxWeights(srcLen, dstLen);
-        ApplyBoxFilter(weights, src, srcW, srcH, dst, dstW, dstH, axis);
+        ApplyBoxFilterInline(src, srcW, srcH, dst, dstW, dstH, axis);
+    }
+
+    /// <summary>Box filter with on-the-fly weight computation — eliminates 2D array allocation.</summary>
+    private static void ApplyBoxFilterInline(
+        ReadOnlySpan<float> src, int srcW, int srcH,
+        Span<float> dst, int dstW, int dstH, int axis)
+    {
+        int srcLen = axis == 1 ? srcW : srcH;
+        int dstLen = axis == 1 ? dstW : dstH;
+        int otherLen = axis == 1 ? srcH : srcW;
+        float scale = (float)srcLen / dstLen;
+
+        for (int d = 0; d < dstLen; d++)
+        {
+            float lo = d * scale;
+            float hi = (d + 1) * scale;
+            int i0 = (int)MathF.Floor(lo);
+            int i1 = (int)MathF.Ceiling(hi);
+            int clampedI1 = Math.Min(i1, srcLen);
+
+            // Compute rowSum first for normalization
+            float rowSum = 0;
+            for (int s = i0; s < clampedI1; s++)
+                rowSum += Math.Min(s + 1, hi) - Math.Max(s, lo);
+            float invRowSum = rowSum > 0 ? 1f / rowSum : 1f;
+
+            // Apply normalized weights
+            for (int s = i0; s < clampedI1; s++)
+            {
+                float w = (Math.Min(s + 1, hi) - Math.Max(s, lo)) * invRowSum;
+                if (w == 0) continue;
+                for (int o = 0; o < otherLen; o++)
+                {
+                    int si = axis == 1 ? o * srcW + s : s * srcW + o;
+                    int di = axis == 1 ? o * dstW + d : d * dstW + o;
+                    dst[di] += src[si] * w;
+                }
+            }
+        }
     }
 
     private static void ApplyBoxFilter(
