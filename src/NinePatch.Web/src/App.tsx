@@ -57,7 +57,7 @@ function buildReconstructed(
 
 function App() {
   const { wasmReady, wasmError, result, compressing, runCompress, resetResult } = useCompressor()
-  const [params, setParams] = useState<CompressParams>({ threshold: 4, margin: 0, minSavings: 30 })
+  const [params, setParams] = useState<CompressParams>({ threshold: 4, margin: 0 })
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [imageData, setImageData] = useState<ImageData | null>(null)
   const [imgWidth, setImgWidth] = useState(0)
@@ -300,9 +300,6 @@ function App() {
                         min={0} max={32} step={1} suffix=" px" />
 
             {/* Min Savings */}
-            <ParamField label="最小节省率" value={params.minSavings}
-                        onChange={(v) => setParams(p => ({ ...p, minSavings: v }))}
-                        min={0} max={80} step={5} suffix=" %" />
           </section>
 
           {/* Action */}

@@ -93,9 +93,15 @@ The system SHALL reconstruct stretched image and report 2D error.
 - **WHEN** compressed image and metadata are used to reconstruct
 - **THEN** resulting RGBA matches original within threshold (for 2D error)
 
-### Requirement: Savings threshold enforcement
-The system SHALL skip compression if savings percentage is below minimum.
+### Requirement: Savings check reports percentage but does not reject
+The system SHALL compute and report savings percentage in the result metadata.
+Callers are responsible for deciding whether the savings are acceptable.
 
-#### Scenario: Savings too low
-- **WHEN** computed savings < minSavings
-- **THEN** system returns CompressStatus.SavingsTooLow
+#### Scenario: High savings
+- **WHEN** compression reduces dimensions significantly
+- **THEN** result.SavingsPct reflects the reduction percentage
+
+#### Scenario: Low savings
+- **WHEN** compression yields minimal or zero savings
+- **THEN** system still returns Success with valid compressed data and metadata
+- **AND** callers can inspect meta.SavingsPct to decide whether to use the result

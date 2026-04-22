@@ -16,10 +16,10 @@ The system SHALL invoke the WASM Compress function with user-adjustable paramete
 
 #### Scenario: Compress with default parameters
 - **WHEN** user clicks the compress button after loading an image
-- **THEN** system calls WASM Compress with current threshold, margin, minSavings values
+- **THEN** system calls WASM Compress with current threshold and margin values
 
 #### Scenario: Adjust parameters
-- **WHEN** user modifies threshold, margin, or minSavings sliders
+- **WHEN** user modifies threshold or margin sliders
 - **THEN** system re-runs compression with new parameters
 
 ### Requirement: Web demo displays three-way comparison
@@ -53,7 +53,3 @@ The system SHALL display error messages when compression fails.
 #### Scenario: No valid split error
 - **WHEN** WASM returns NoValidSplit status
 - **THEN** system displays "Unable to find valid nine-patch split" message
-
-#### Scenario: Savings too low
-- **WHEN** WASM returns SavingsTooLow status
-- **THEN** system displays "Savings below threshold" message

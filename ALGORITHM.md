@@ -121,7 +121,9 @@ Compute 2D reconstruction error vs original. Report but do not iterate.
 ## Savings check
 
 savings = 1 - (comp_W * comp_H) / (W * H)
-If savings < savings_min, still return result but flag as "not worth it".
+The system computes and reports savings percentage in the result metadata.
+Core algorithm does NOT reject based on savings; callers decide whether to accept
+the result based on their own minimum threshold.
 
 ## Output metadata format
 

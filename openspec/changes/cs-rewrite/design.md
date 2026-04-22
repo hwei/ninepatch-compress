@@ -54,7 +54,6 @@ public enum CompressStatus
     Success = 0,
     InvalidInput = 1,
     NoValidSplit = 2,
-    SavingsTooLow = 3,
 }
 
 public sealed class CompressResult
@@ -76,8 +75,7 @@ public static class NinePatchCompressor
         int width,
         int height,
         double threshold = 4.0,     // [0, 255] scale
-        int margin = 0,
-        double minSavings = 30.0);
+        int margin = 0);
 }
 ```
 
@@ -128,18 +126,17 @@ public static partial class WasmExports
         int width,
         int height,
         double threshold = 4.0,
-        int margin = 0,
-        double minSavings = 30.0)
+        int margin = 0)
     {
         return NinePatchCompressor.Compress(
-            rgba, width, height, threshold, margin, minSavings);
+            rgba, width, height, threshold, margin);
     }
 }
 ```
 
 **JS Usage**:
 ```javascript
-const result = Module.Compress(rgbaBytes, width, height, 4.0, 0, 30.0);
+const result = Module.Compress(rgbaBytes, width, height, 4.0, 0);
 console.log(result.status); // 0 = success
 console.log(result.meta.xb); // nine-patch boundaries
 ```

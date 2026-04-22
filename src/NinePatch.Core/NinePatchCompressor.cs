@@ -10,9 +10,8 @@ public static class NinePatchCompressor
         int width,
         int height,
         double threshold = 4.0,     // [0, 255] scale
-        int margin = 0,
-        double minSavings = 30.0)
+        int margin = 0)
     {
-        return Compressor.RunFullPipeline(rgba, width, height, threshold, margin, minSavings);
+        return Compressor.RunFullPipeline(rgba, width, height, threshold, margin);
     }
 }

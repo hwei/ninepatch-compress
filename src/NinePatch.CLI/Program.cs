@@ -55,13 +55,15 @@ else
     image.CopyPixelDataTo(rgba);
 }
 
-var result = NinePatchCompressor.Compress(rgba, width, height, threshold, margin, minSavings);
+var result = NinePatchCompressor.Compress(rgba, width, height, threshold, margin);
 
 switch (result.Status)
 {
     case CompressStatus.Success:
     {
         var meta = result.Meta!.Value;
+        if (meta.SavingsPct < minSavings)
+            Console.Error.WriteLine($"Warning: savings {meta.SavingsPct:F1}% is below the recommended minimum {minSavings}%");
         if (rawOut)
         {
             if (output is null or "-")
@@ -125,9 +127,6 @@ switch (result.Status)
     case CompressStatus.NoValidSplit:
         Console.Error.WriteLine($"Error: {result.Message}");
         return 2;
-    case CompressStatus.SavingsTooLow:
-        Console.Error.WriteLine($"Error: {result.Message}");
-        return 3;
     default:
         return 1;
 }

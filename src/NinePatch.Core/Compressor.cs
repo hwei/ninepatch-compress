@@ -333,7 +333,7 @@ public static class Compressor
     /// <summary>Run full pipeline with margin auto-retry.</summary>
     public static CompressResult RunFullPipeline(
         ReadOnlySpan<byte> imgU8, int width, int height,
-        double threshold, int margin = 0, double minSavings = 30.0)
+        double threshold, int margin = 0)
     {
         if (imgU8.Length != width * height * 4)
             return CompressResult.Fail(CompressStatus.InvalidInput,
@@ -368,15 +368,6 @@ public static class Compressor
         // Identity fallback: allow one-way compression when only one axis is stretchable
         SearchResult1D finalX = resX ?? new SearchResult1D(0, width, width);
         SearchResult1D finalY = resY ?? new SearchResult1D(0, height, height);
-
-        // Check savings
-        int w2 = finalX.N + finalX.Begin + (width - finalX.End);
-        int h2 = finalY.N + finalY.Begin + (height - finalY.End);
-        double savingsPct = (1.0 - (double)(w2 * h2) / (width * height)) * 100.0;
-
-        if (savingsPct < minSavings)
-            return CompressResult.Fail(CompressStatus.SavingsTooLow,
-                $"Savings {savingsPct:F1}% below minimum {minSavings}%");
 
         // Compress
         var (compressed, meta) = Compress2D(imgLinear, finalX, finalY);

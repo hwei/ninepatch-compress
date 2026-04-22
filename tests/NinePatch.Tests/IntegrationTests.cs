@@ -16,8 +16,27 @@ public class IntegrationTests
         Assert.NotNull(result.CompressedRgba);
 
         var meta = result.Meta.Value;
-        Assert.True(meta.SavingsPct >= 30.0);
+        Assert.True(meta.SavingsPct > 0);
         Assert.True(meta.Error2d <= 4.0);
+    }
+
+    [Fact]
+    public void FullPipeline_LowSavings_StillReturnsSuccess()
+    {
+        // Gradient image where nine-patch compression yields minimal savings.
+        // Core algorithm should still return Success regardless of savings amount.
+        int w = 100, h = 100;
+        byte[] img = CreateHGradientU8(w, h);
+        var result = NinePatchCompressor.Compress(img, w, h, threshold: 4.0);
+
+        Assert.Equal(CompressStatus.Success, result.Status);
+        Assert.NotNull(result.Meta);
+        Assert.NotNull(result.CompressedRgba);
+
+        var meta = result.Meta.Value;
+        // Savings can be low for gradient images; the key is that we get a valid result
+        Assert.True(meta.Error2d <= 5.0);
+        Assert.True(meta.CompressedW > 0 && meta.CompressedH > 0);
     }
 
     [Fact]
@@ -59,6 +78,19 @@ public class IntegrationTests
             img[i * 4 + 1] = g;
             img[i * 4 + 2] = b;
             img[i * 4 + 3] = a;
+        }
+        return img;
+    }
+
+    private static byte[] CreateHGradientU8(int w, int h)
+    {
+        var img = new byte[w * h * 4];
+        for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+        {
+            int i = (y * w + x) * 4;
+            byte v = (byte)(x * 255 / (w - 1));
+            img[i] = v; img[i + 1] = v; img[i + 2] = v; img[i + 3] = 255;
         }
         return img;
     }

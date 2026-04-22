@@ -12,7 +12,7 @@ interface WasmInstance {
   NinePatch: {
     Wasm: {
       WasmExports: {
-        Compress: (rgba: Uint8Array, w: number, h: number, threshold: number, margin: number, minSavings: number) => string;
+        Compress: (rgba: Uint8Array, w: number, h: number, threshold: number, margin: number) => string;
         GetVersion: () => string;
       };
     };
@@ -48,12 +48,11 @@ export async function compress(
   height: number,
   threshold: number,
   margin: number,
-  minSavings: number,
 ): Promise<CompressResult> {
   if (!wasmExports) {
     await loadWasm();
   }
-  const json = wasmExports!.NinePatch.Wasm.WasmExports.Compress(rgba, width, height, threshold, margin, minSavings);
+  const json = wasmExports!.NinePatch.Wasm.WasmExports.Compress(rgba, width, height, threshold, margin);
   return JSON.parse(json);
 }
 

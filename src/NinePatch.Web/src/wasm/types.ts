@@ -1,4 +1,4 @@
-export type CompressStatus = 'success' | 'invalid_input' | 'no_valid_split' | 'savings_too_low' | 'loading' | 'idle';
+export type CompressStatus = 'success' | 'invalid_input' | 'no_valid_split' | 'loading' | 'idle';
 
 export interface NinePatchMeta {
   xb: number;
@@ -27,5 +27,4 @@ export interface CompressResult {
 export interface CompressParams {
   threshold: number;
   margin: number;
-  minSavings: number;
 }

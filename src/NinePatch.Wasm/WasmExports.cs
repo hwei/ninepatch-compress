@@ -14,12 +14,11 @@ public static partial class WasmExports
         int width,
         int height,
         double threshold = 4.0,
-        int margin = 0,
-        double minSavings = 30.0)
+        int margin = 0)
     {
         try
         {
-            var result = NinePatchCompressor.Compress(rgba, width, height, threshold, margin, minSavings);
+            var result = NinePatchCompressor.Compress(rgba, width, height, threshold, margin);
             return SerializeResult(result);
         }
         catch (Exception ex)

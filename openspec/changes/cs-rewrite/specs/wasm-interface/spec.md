@@ -4,7 +4,7 @@
 The system SHALL export a Compress function callable from JavaScript that returns a JSON string.
 
 #### Scenario: JS calls Compress
-- **WHEN** JavaScript code calls `Module.Compress(rgba, w, h, threshold, margin, minSavings)`
+- **WHEN** JavaScript code calls `Module.Compress(rgba, w, h, threshold, margin)`
 - **THEN** system returns a JSON string that JS must parse
 
 ### Requirement: WASM returns structured error status
@@ -18,9 +18,13 @@ The system SHALL return CompressStatus enum value indicating success or failure 
 - **WHEN** no valid nine-patch split found
 - **THEN** result.status SHALL be 2 (NoValidSplit)
 
-#### Scenario: Savings too low status
-- **WHEN** savings below threshold
-- **THEN** result.status SHALL be 3 (SavingsTooLow)
+### Requirement: WASM reports savings in metadata
+The system SHALL include the computed savings percentage in result metadata.
+Callers decide whether to accept or reject based on their own threshold.
+
+#### Scenario: Savings reported
+- **WHEN** compression succeeds
+- **THEN** result.metadata.savings_pct SHALL contain the reduction percentage
 
 ### Requirement: WASM returns metadata on success
 The system SHALL include NinePatchMeta and compressed RGBA in result when status is Success.

@@ -111,7 +111,7 @@ public class ReconstructionTests
         int w = 100, h = 3;
         byte[] img = CreateImageU8(w, h, 128, 128, 128, 255);
 
-        var result = NinePatchCompressor.Compress(img, w, h, threshold: 4.0, minSavings: 0.0);
+        var result = NinePatchCompressor.Compress(img, w, h, threshold: 4.0);
 
         Assert.Equal(CompressStatus.Success, result.Status);
         Assert.NotNull(result.Meta);
