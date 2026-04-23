@@ -11,6 +11,7 @@ var images = new (string name, byte[] rgba, int w, int h)[]
     Load("tests/samples/hgrad.png"),
     Load("tests/samples/rounded_panel.png"),
     Load("tests/samples/img_hero_pic_201_1.png"), // hard-to-compress noise image
+    Load("tests/samples/img_zhiyin_tanchu_bg.png"), // UI panel with small decorations
 };
 
 const float threshold = 4f;

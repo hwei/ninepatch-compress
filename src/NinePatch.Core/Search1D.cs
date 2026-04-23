@@ -341,6 +341,174 @@ public static class Search1D
     }
 
     /// <summary>
+    /// Computes per-axis gradient magnitude: for each position i, the L1-mean
+    /// absolute difference between adjacent positions along the axis, averaged
+    /// over the orthogonal axis, max over RGBA channels.
+    /// Returns array of length L-1 (gradient between position i and i+1).
+    /// </summary>
+    internal static float[] ComputeAxisGradient(SoaImage img, int axis, PrecomputedSrgb origSrgb)
+    {
+        int l = axis == 1 ? img.Width : img.Height;
+        int otherLen = axis == 1 ? img.Height : img.Width;
+        int w = img.Width;
+        float[][] planes = [origSrgb.R, origSrgb.G, origSrgb.B, origSrgb.Alpha];
+        int gradientLen = l - 1;
+        float[] gradient = new float[gradientLen];
+        int vecLen = Vector<float>.Count;
+        float invOther = 1f / otherLen;
+
+        for (int ch = 0; ch < 4; ch++)
+        {
+            if (axis == 1)
+            {
+                // X axis: vecLen gradient positions can be processed in parallel
+                // because columns are contiguous in memory within a row.
+                for (int i = 0; i < gradientLen;)
+                {
+                    int remaining = gradientLen - i;
+                    if (remaining >= vecLen)
+                    {
+                        var acc = Vector<float>.Zero;
+                        for (int o = 0; o < otherLen; o++)
+                        {
+                            int idx1 = o * w + i;
+                            int idx2 = o * w + i + 1;
+                            var v1 = new Vector<float>(planes[ch], idx1);
+                            var v2 = new Vector<float>(planes[ch], idx2);
+                            acc += Vector.Abs(v2 - v1);
+                        }
+                        acc *= invOther;
+                        for (int j = 0; j < vecLen; j++)
+                        {
+                            float val = acc[j];
+                            if (val > gradient[i + j]) gradient[i + j] = val;
+                        }
+                        i += vecLen;
+                    }
+                    else
+                    {
+                        float sumDiff = 0f;
+                        for (int o = 0; o < otherLen; o++)
+                        {
+                            int idx1 = o * w + i;
+                            int idx2 = o * w + i + 1;
+                            sumDiff += MathF.Abs(planes[ch][idx2] - planes[ch][idx1]);
+                        }
+                        float avgDiff = sumDiff * invOther;
+                        if (avgDiff > gradient[i]) gradient[i] = avgDiff;
+                        i++;
+                    }
+                }
+            }
+            else
+            {
+                // Y axis: rows are separated by stride W, so SIMD must
+                // traverse the orthogonal dimension (columns) instead.
+                for (int i = 0; i < gradientLen; i++)
+                {
+                    int offset1 = i * w;
+                    int offset2 = (i + 1) * w;
+                    int o = 0;
+                    float sumDiff = 0f;
+                    for (; o < otherLen - vecLen + 1; o += vecLen)
+                    {
+                        var v1 = new Vector<float>(planes[ch], offset1 + o);
+                        var v2 = new Vector<float>(planes[ch], offset2 + o);
+                        var diff = Vector.Abs(v2 - v1);
+                        for (int j = 0; j < vecLen; j++)
+                            sumDiff += diff[j];
+                    }
+                    for (; o < otherLen; o++)
+                        sumDiff += MathF.Abs(planes[ch][offset2 + o] - planes[ch][offset1 + o]);
+                    float avgDiff = sumDiff * invOther;
+                    if (avgDiff > gradient[i]) gradient[i] = avgDiff;
+                }
+            }
+        }
+
+        return gradient;
+    }
+
+    /// <summary>
+    /// Extracts edge positions from a gradient array using a hybrid absolute + relative threshold.
+    /// A position i is an edge position iff g[i] >= max(absThreshold, P90(g)).
+    /// Returns sorted array of edge position indices.
+    /// </summary>
+    internal static int[] ExtractEdgePositions(float[] gradient, float absThreshold = 8f / 255f)
+    {
+        if (gradient.Length == 0) return [];
+
+        // Compute 90th percentile
+        var sorted = (float[])gradient.Clone();
+        Array.Sort(sorted);
+        int p90Index = (int)Math.Floor(sorted.Length * 0.9);
+        p90Index = Math.Max(0, Math.Min(p90Index, sorted.Length - 1));
+        float percentileThreshold = sorted[p90Index];
+
+        float effectiveThreshold = MathF.Max(absThreshold, percentileThreshold);
+
+        var positions = new List<int>();
+        for (int i = 0; i < gradient.Length; i++)
+        {
+            if (gradient[i] >= effectiveThreshold)
+                positions.Add(i);
+        }
+        return positions.ToArray();
+    }
+
+    /// <summary>
+    /// Builds restricted candidate sets B and E from detected edge positions.
+    /// B = {margin} U {edge, edge+1, edge+2 : edge in edges, clamped to [margin, hiBound)}
+    /// E = {hiBound} U {edge-1, edge, edge+1 : edge in edges, clamped to (margin, hiBound]}
+    /// When edges is empty, falls back to stride-sampled positions every L/16.
+    /// Returns sorted, deduplicated arrays.
+    /// </summary>
+    internal static (int[] B, int[] E) BuildCandidateSets(int[] edges, int margin, int hiBound)
+    {
+        var bSet = new HashSet<int>();
+        var eSet = new HashSet<int>();
+
+        if (edges.Length == 0)
+        {
+            // Stride-sampled fallback: every L/16 positions
+            int stride = Math.Max(1, (hiBound - margin) / 16);
+            bSet.Add(margin);
+            eSet.Add(hiBound);
+            for (int pos = margin + stride; pos < hiBound; pos += stride)
+            {
+                bSet.Add(pos);
+                eSet.Add(pos);
+            }
+        }
+        else
+        {
+            bSet.Add(margin);
+            eSet.Add(hiBound);
+
+            foreach (int edge in edges)
+            {
+                // B candidates: edge, edge+1, edge+2
+                for (int offset = 0; offset <= 2; offset++)
+                {
+                    int pos = edge + offset;
+                    if (pos >= margin && pos < hiBound) bSet.Add(pos);
+                }
+
+                // E candidates: edge-1, edge, edge+1 (left-leaning from edge position)
+                for (int offset = -1; offset <= 1; offset++)
+                {
+                    int pos = edge + offset;
+                    if (pos > margin && pos <= hiBound) eSet.Add(pos);
+                }
+            }
+        }
+
+        var bArray = bSet.OrderBy(x => x).ToArray();
+        var eArray = eSet.OrderBy(x => x).ToArray();
+        return (bArray, eArray);
+    }
+
+    /// <summary>
     /// Detects if an axis is noisy (incompressible) by checking adjacent-position
     /// squared-differences. For noise, adjacent positions differ significantly.
     /// For smooth/gradient images, adjacent positions are similar.
@@ -439,6 +607,23 @@ public static class Search1D
         if (DetectNoisyAxis(img, axis, origSrgb, l, w, varianceThreshold))
             return null;
 
+        // Gradient-derived candidate restriction
+        float[] axisGradient = ComputeAxisGradient(img, axis, origSrgb);
+        int[] edgePositions = ExtractEdgePositions(axisGradient);
+        var (bCandidates, eCandidates) = BuildCandidateSets(edgePositions, loBound, hiBound);
+
+        // Build (b, e) pair list from cartesian product, filtered and sorted by len descending
+        var pairs = new List<(int b, int e, int len)>();
+        foreach (int b in bCandidates)
+        {
+            foreach (int e in eCandidates)
+            {
+                if (e - b >= 4 && e <= hiBound)
+                    pairs.Add((b, e, e - b));
+            }
+        }
+        pairs.Sort((a, b2) => b2.len.CompareTo(a.len));
+
         // Allocate recon once, pre-filled with original data
         var recon = SoaImage.Create(w, h);
         Buffer.BlockCopy(img.R, 0, recon.R, 0, pixelCount * sizeof(float));
@@ -451,53 +636,88 @@ public static class Search1D
         int bestSaving = -1;
         SearchResult1D? best = null;
 
-        int maxLen = hiBound - loBound;
-        for (int len = maxLen; len >= 4; len--)
+        foreach (var (b, e, len) in pairs)
         {
             if (len - 2 <= bestSaving) break;
             int maxN = len / 2;
-            bool anyTryNPassed = false;
 
-            for (int b = loBound; b + len <= hiBound; b++)
+            // Variance pre-filter: skip intervals with too much high-frequency content
+            float intervalVariance = VarianceForInterval(prefixVariance, b, e);
+            if (intervalVariance > varianceThreshold) continue;
+
+            // Quick reject
+            if (!TryN(img, b, e, maxN, threshold, axis, recon, scratch, origSrgb)) continue;
+            int lo = 2, hi = maxN - 1;
+            int foundN = maxN;
+            while (lo <= hi)
             {
-                int e = b + len;
-
-                // Variance pre-filter: skip intervals with too much high-frequency content
-                float intervalVariance = VarianceForInterval(prefixVariance, b, e);
-                if (intervalVariance > varianceThreshold) continue;
-
-                // Quick reject
-                if (!TryN(img, b, e, maxN, threshold, axis, recon, scratch, origSrgb)) continue;
-
-                anyTryNPassed = true;
-                int lo = 2, hi = maxN - 1;
-                int foundN = maxN;
-                while (lo <= hi)
+                int mid = (lo + hi) / 2;
+                if (TryN(img, b, e, mid, threshold, axis, recon, scratch, origSrgb))
                 {
-                    int mid = (lo + hi) / 2;
-                    if (TryN(img, b, e, mid, threshold, axis, recon, scratch, origSrgb))
-                    {
-                        foundN = mid;
-                        hi = mid - 1;
-                    }
-                    else
-                    {
-                        lo = mid + 1;
-                    }
+                    foundN = mid;
+                    hi = mid - 1;
                 }
-
-                int saving = len - foundN;
-                if (saving > bestSaving)
+                else
                 {
-                    bestSaving = saving;
-                    best = new SearchResult1D(b, e, foundN);
-                    if (foundN == 2) break;
+                    lo = mid + 1;
                 }
             }
 
-            // Early termination: if len=4 completed with zero passing TryN, the image
-            // is fully incompressible — no need to test remaining shorter lengths
-            if (len == 4 && !anyTryNPassed) return null;
+            int saving = len - foundN;
+            if (saving > bestSaving)
+            {
+                bestSaving = saving;
+                best = new SearchResult1D(b, e, foundN);
+                if (foundN == 2) break;
+            }
+        }
+
+        // Safety-net fallback: if restricted enumeration found no valid split,
+        // fall back to full exhaustive enumeration (Decision 5, design.md).
+        if (best is null)
+        {
+            int maxLen = hiBound - loBound;
+            for (int len = maxLen; len >= 4; len--)
+            {
+                if (len - 2 <= bestSaving) break;
+                int maxN = len / 2;
+
+                for (int b = loBound; b + len <= hiBound; b++)
+                {
+                    int e = b + len;
+
+                    float intervalVariance = VarianceForInterval(prefixVariance, b, e);
+                    if (intervalVariance > varianceThreshold) continue;
+
+                    if (!TryN(img, b, e, maxN, threshold, axis, recon, scratch, origSrgb)) continue;
+
+                    int lo = 2, hi = maxN - 1;
+                    int foundN = maxN;
+                    while (lo <= hi)
+                    {
+                        int mid = (lo + hi) / 2;
+                        if (TryN(img, b, e, mid, threshold, axis, recon, scratch, origSrgb))
+                        {
+                            foundN = mid;
+                            hi = mid - 1;
+                        }
+                        else
+                        {
+                            lo = mid + 1;
+                        }
+                    }
+
+                    int saving = len - foundN;
+                    if (saving > bestSaving)
+                    {
+                        bestSaving = saving;
+                        best = new SearchResult1D(b, e, foundN);
+                        if (foundN == 2) break;
+                    }
+                }
+
+                if (len == 4 && bestSaving == -1) return null;
+            }
         }
 
         return best;

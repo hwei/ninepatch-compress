@@ -44,12 +44,19 @@ For each axis (X and Y independently), find the best compressible region:
 1. **Noisy-axis pre-filter**: compute adjacent-position squared-differences.
    If the max mean squared-difference exceeds 50% of the variance threshold,
    the axis is declared incompressible and the search returns null immediately.
-2. Enumerate all candidate intervals (begin, end) within the margin bounds.
+2. **Gradient-derived candidate restriction**: compute per-axis gradient
+   magnitude `g[i] = max_ch(mean |srgb[i+1] - srgb[i]|)` across the orthogonal
+   axis. Extract edge positions where `g[i] >= max(8/255, P90(g))`. Build
+   restricted candidate sets B and E from `{margin, hiBound} ∪ neighborhood(edge_positions)`.
+   Enumerate only `(b, e)` pairs from `B × E` where `e - b >= 4`, sorted by
+   `len = e - b` descending. If no edges are detected, fall back to
+   stride-sampled candidates (every `L/16` positions).
 3. For each interval, binary-search the smallest N that passes the error
    threshold (i.e., maximum reconstruction error <= threshold).
 4. Pick the (begin, end, N) tuple with maximum saving = length - N.
-5. The outer loop iterates length from largest down, terminating early
-   when no remaining length can beat the current best (`len - 2 <= bestSaving`).
+5. Early termination when no remaining pair can beat the current best
+   (`len - 2 <= bestSaving`). The variance pre-filter (`intervalVariance > varianceThreshold`)
+   remains as a secondary gate inside the loop.
 
 X and Y passes are independent. If one axis finds no valid split, it falls
 back to identity (full length, no downsampling).
