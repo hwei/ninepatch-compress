@@ -1,6 +1,6 @@
 ## Why
 
-Profiling `Search1D.Run()` on a real UI texture (`img_zhiyin_tanchu_bg.png`, 637×822) revealed that the existing variance pre-filter is structurally unable to prune intervals on typical "uniform panel + small decorations" UI artwork:
+Profiling `Search1D.Run()` on a real UI texture (`tests/samples/img_zhiyin_tanchu_bg.png`, 637×822) revealed that the existing variance pre-filter is structurally unable to prune intervals on typical "uniform panel + small decorations" UI artwork:
 
 | Metric | X axis | Y axis |
 |---|---|---|
@@ -22,7 +22,7 @@ The bottleneck is **how many `(b, e)` pairs get enumerated**, not how expensive 
 - Keep the existing variance pre-filter as a secondary gate (still useful for synthetic noise images) and `DetectNoisyAxis` early-out unchanged.
 - Provide a **safety-net fallback**: if the gradient-restricted search returns null, optionally fall back to full enumeration once before declaring the axis incompressible (configurable, off by default until validated).
 
-Performance target: `img_zhiyin_tanchu_bg.png` total search from ~656 s → < 5 s.
+Performance target: `tests/samples/img_zhiyin_tanchu_bg.png` total search from ~656 s → < 5 s.
 
 ## Capabilities
 

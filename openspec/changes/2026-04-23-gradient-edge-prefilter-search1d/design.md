@@ -1,6 +1,6 @@
 ## Context
 
-`Search1D.Run()` enumerates O(L²) `(b, e)` intervals. The variance pre-filter (added previously) gives O(1) per-interval rejection but, on typical UI textures with mostly-uniform backgrounds, the *interval-mean* variance is dominated by the smooth bulk and almost no intervals are pruned. Profiling on `img_zhiyin_tanchu_bg.png` (637×822, see proposal table) showed 0% variance-prefilter pass rate while `TryN` consumes 99.95% of wall clock.
+`Search1D.Run()` enumerates O(L²) `(b, e)` intervals. The variance pre-filter (added previously) gives O(1) per-interval rejection but, on typical UI textures with mostly-uniform backgrounds, the *interval-mean* variance is dominated by the smooth bulk and almost no intervals are pruned. Profiling on `tests/samples/img_zhiyin_tanchu_bg.png` (637×822, see proposal table) showed 0% variance-prefilter pass rate while `TryN` consumes 99.95% of wall clock.
 
 The natural endpoints of a stretchable nine-patch region are *image edges* — the borders of decorations, frames, and shape boundaries. An optimal `(b, e)` is overwhelmingly likely to sit just inside or just outside such an edge. This change replaces "iterate every position" with "iterate only positions adjacent to detected edges," shifting the bottleneck from per-interval cost to candidate-set size.
 
@@ -8,7 +8,7 @@ The natural endpoints of a stretchable nine-patch region are *image edges* — t
 
 **Goals:**
 - Reduce `Search1D` candidate count from O(L²) to O(K²) where K is the count of detected edges (typically K << 50 for UI textures).
-- Achieve `img_zhiyin_tanchu_bg.png` total search < 5 s (currently ~656 s).
+- Achieve `tests/samples/img_zhiyin_tanchu_bg.png` total search < 5 s (currently ~656 s).
 - Preserve identical `SearchResult1D?` output for all existing test images.
 - No regression on synthetic noise / gradient / solid-color images.
 

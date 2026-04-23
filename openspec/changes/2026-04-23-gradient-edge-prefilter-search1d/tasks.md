@@ -37,8 +37,8 @@
 
 ## 6. Performance verification
 
-- [ ] 6.1 Add `img_zhiyin_tanchu_bg.png` (or copy/symlink it into the bench fixtures) as a benchmark target in `src/NinePatch.Bench/Program.cs`.
-- [ ] 6.2 Confirm: total `Search1D` time on this image drops from ~656 s to < 5 s. If not, profile and report.
+- [ ] 6.1 Add `tests/samples/img_zhiyin_tanchu_bg.png` (already committed to the repo) as a benchmark target in `src/NinePatch.Bench/Program.cs`.
+- [ ] 6.2 Confirm: total `Search1D` time on `tests/samples/img_zhiyin_tanchu_bg.png` drops from ~656 s to < 5 s. If not, profile and report.
 - [ ] 6.3 Confirm: existing benchmark images (gradient, rounded panel, noise) within ±10% of pre-change wall clock.
 - [ ] 6.4 Print and record the edge-position counts (`|edges|` per axis) for each benchmark image — useful for future tuning.
 
