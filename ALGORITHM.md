@@ -41,12 +41,15 @@ sRGB encoding:
 
 For each axis (X and Y independently), find the best compressible region:
 
-1. Enumerate all candidate intervals (begin, end) within the margin bounds.
-2. For each interval, binary-search the smallest N that passes the error
+1. **Noisy-axis pre-filter**: compute adjacent-position squared-differences.
+   If the max mean squared-difference exceeds 50% of the variance threshold,
+   the axis is declared incompressible and the search returns null immediately.
+2. Enumerate all candidate intervals (begin, end) within the margin bounds.
+3. For each interval, binary-search the smallest N that passes the error
    threshold (i.e., maximum reconstruction error <= threshold).
-3. Pick the (begin, end, N) tuple with maximum saving = length - N.
-4. The outer loop iterates length from largest down, terminating early
-   when no remaining length can beat the current best.
+4. Pick the (begin, end, N) tuple with maximum saving = length - N.
+5. The outer loop iterates length from largest down, terminating early
+   when no remaining length can beat the current best (`len - 2 <= bestSaving`).
 
 X and Y passes are independent. If one axis finds no valid split, it falls
 back to identity (full length, no downsampling).
@@ -54,7 +57,9 @@ back to identity (full length, no downsampling).
 ## Auto-retry with increasing margin
 
 When margin=0 finds no valid split, the system automatically retries with
-progressively larger margins (step=4, up to min(W,H)/4). If the caller
+progressively larger margins (step=4, up to min(W,H)/4). At each margin step,
+only axes that previously returned null are retried. The loop terminates as
+soon as at least one previously-null axis finds a valid split. If the caller
 explicitly specifies margin>0, no auto-retry is performed.
 
 ## Building the compressed texture
@@ -92,6 +97,11 @@ JSON sidecar:
   "grid": { "xb": xb, "yb": yb, "width": xe - xb, "height": ye - yb },
   "compressed_size": [compW, compH],
   "measured_max_error": err2D,
-  "savings_pct": savings * 100
+  "savings_pct": savings * 100,
+  "error_x": per-axis X boundary error (or null if identity fallback),
+  "error_y": per-axis Y boundary error (or null if identity fallback)
 }
 ```
+
+The per-axis boundary errors are computed by downsampling each stretch region
+to N=2 pixels, upsampling back, and measuring the reconstruction error.

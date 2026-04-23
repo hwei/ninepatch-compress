@@ -55,7 +55,7 @@ The system SHALL binary-search for the smallest compressed size N that meets err
 - **THEN** system returns SearchResult1D with (begin, end, N)
 
 #### Scenario: No valid split
-- **WHEN** no valid split exists even after shrinking interval
+- **WHEN** binary search finds no N in [2, maxN] that passes threshold, for all candidate intervals
 - **THEN** system returns null (search_1d) or CompressStatus.NoValidSplit (compress)
 
 #### Scenario: One-way compression with identity fallback
@@ -64,16 +64,30 @@ The system SHALL binary-search for the smallest compressed size N that meets err
   (`begin=0, end=full_len, N=full_len`) for the other axis
 - **AND** compression proceeds to savings check and reconstruction as normal
 
-#### Scenario: Shrink uses full compress-reconstruct error
-- **WHEN** binary search fails and interval needs shrinking
-- **THEN** system compares full 1D compress-reconstruct error on each side to decide shrink direction
+#### Scenario: Binary search converges on smallest valid N
+- **WHEN** multiple values of N pass the error threshold for a candidate interval
+- **THEN** binary search converges to the smallest N that passes
+- **AND** if no N in [2, maxN] passes, the interval is skipped without spatial shrink
+
+### Requirement: Search1D pre-filters high-variance axes before main loop
+Before enumerating candidate intervals, `Search1D.Run()` SHALL evaluate whether the entire axis is incompressible by computing the mean squared-difference between adjacent positions (columns for X axis, rows for Y axis). If the maximum mean squared-difference across all channels exceeds 50% of the variance threshold, the axis SHALL be declared incompressible and the search SHALL return null immediately without visiting any candidate intervals.
+
+#### Scenario: Noisy axis is rejected early
+- **WHEN** an axis has high-frequency noise causing adjacent-position differences to exceed 50% of the variance threshold
+- **THEN** `Search1D.Run()` SHALL return null
+- **AND** no candidate intervals SHALL be evaluated
+
+#### Scenario: Smooth axis proceeds to main search
+- **WHEN** an axis has low adjacent-position variance
+- **THEN** `Search1D.Run()` SHALL proceed to the full interval enumeration and binary search
 
 ### Requirement: Auto-retry with increasing margin
-The system SHALL automatically retry with increasing margin when margin=0 fails.
+The system SHALL automatically retry with increasing margin when margin=0 fails. The retry loop SHALL iterate margin from step to min(W,H)/4. Within each step, only axes that previously returned null SHALL be retried. The loop SHALL terminate as soon as at least one previously-null axis finds a valid split.
 
 #### Scenario: Margin=0 fails, auto-retry succeeds
 - **WHEN** no valid split found with margin=0
 - **THEN** system retries with margin=4, 8, 12, ... up to min(W,H)/4
+- **AND** loop terminates as soon as either axis finds a valid split
 
 #### Scenario: Explicit margin, no auto-retry
 - **WHEN** user specifies margin>0 and search fails
