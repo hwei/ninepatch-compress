@@ -257,7 +257,7 @@ public class SegmenterTests
     }
 
     [Fact]
-    public void Intersect_AlphaChannelDisagreement_ShouldRejectRegion()
+    public void Intersect_AlphaChannelDisagreement_ShouldSplitIntoSubsegments()
     {
         // Directly test Intersect: if alpha channel disagrees, the region is rejected
         var rgb = new List<(int, int)> { (0, 100) };
