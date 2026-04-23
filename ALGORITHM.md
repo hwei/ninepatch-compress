@@ -58,8 +58,8 @@ back to identity (full length, no downsampling).
 
 When margin=0 finds no valid split, the system automatically retries with
 progressively larger margins (step=4, up to min(W,H)/4). At each margin step,
-only axes that previously returned null are retried. The loop terminates as
-soon as at least one previously-null axis finds a valid split. If the caller
+only axes that previously returned null are retried. The loop continues until
+both axes find a valid split, or maxMargin is reached. If the caller
 explicitly specifies margin>0, no auto-retry is performed.
 
 ## Building the compressed texture

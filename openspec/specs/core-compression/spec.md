@@ -82,12 +82,12 @@ Before enumerating candidate intervals, `Search1D.Run()` SHALL evaluate whether 
 - **THEN** `Search1D.Run()` SHALL proceed to the full interval enumeration and binary search
 
 ### Requirement: Auto-retry with increasing margin
-The system SHALL automatically retry with increasing margin when margin=0 fails. The retry loop SHALL iterate margin from step to min(W,H)/4. Within each step, only axes that previously returned null SHALL be retried. The loop SHALL terminate as soon as at least one previously-null axis finds a valid split.
+The system SHALL automatically retry with increasing margin when margin=0 fails. The retry loop SHALL iterate margin from step to min(W,H)/4. Within each step, only axes that previously returned null SHALL be retried. The loop SHALL terminate only when both axes find a valid split, or when maxMargin is reached.
 
 #### Scenario: Margin=0 fails, auto-retry succeeds
 - **WHEN** no valid split found with margin=0
 - **THEN** system retries with margin=4, 8, 12, ... up to min(W,H)/4
-- **AND** loop terminates as soon as either axis finds a valid split
+- **AND** loop continues until both axes find valid splits or maxMargin is reached
 
 #### Scenario: Explicit margin, no auto-retry
 - **WHEN** user specifies margin>0 and search fails
