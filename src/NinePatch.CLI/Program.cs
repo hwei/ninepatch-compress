@@ -11,7 +11,7 @@ if (args.Length > 0 && (args[0] == "--help" || args[0] == "-h"))
 
 string? input = null, output = null, raw = null, metaOut = null;
 double threshold = 4.0, minSavings = 30.0;
-int margin = 0;
+int margin = 0, minLength = 8;
 bool rawOut = false;
 
 for (int i = 0; i < args.Length; i++)
@@ -25,6 +25,7 @@ for (int i = 0; i < args.Length; i++)
         case "-t": case "--threshold": threshold = double.Parse(args[++i]); break;
         case "-m": case "--margin": margin = int.Parse(args[++i]); break;
         case "-s": case "--min-savings": minSavings = double.Parse(args[++i]); break;
+        case "--min-length": minLength = int.Parse(args[++i]); break;
         default:
             if (input is null) input = args[i];
             else { Console.Error.WriteLine($"Unknown argument: {args[i]}"); PrintHelp(); return 1; }
@@ -55,7 +56,7 @@ else
     image.CopyPixelDataTo(rgba);
 }
 
-var result = NinePatchCompressor.Compress(rgba, width, height, threshold, margin);
+var result = NinePatchCompressor.Compress(rgba, width, height, threshold, margin, minLength);
 
 switch (result.Status)
 {
@@ -146,6 +147,7 @@ static void PrintHelp()
           --meta-out PATH    Output metadata JSON ('-' for stderr)
           -t, --threshold N  Error threshold [0-255] (default: 4.0)
           -m, --margin N     Minimum corner size (default: 0)
+          --min-length N     Minimum segment length (default: 8)
           -s, --min-savings N Minimum savings % (default: 30.0)
           -h, --help         Show help
         """);

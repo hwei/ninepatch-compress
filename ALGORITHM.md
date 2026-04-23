@@ -37,29 +37,60 @@ sRGB encoding:
 - Alpha error: direct float difference |a_orig - a_recon| * 255.
 - Final: max over all pixels and channels.
 
-## 1D search
+## 1D search: Segment → Intersect → Squeeze → Optimize pipeline
 
-For each axis (X and Y independently), find the best compressible region:
+For each axis (X and Y independently), the pipeline finds the best
+compressible region through four composable stages:
 
-1. **Noisy-axis pre-filter**: compute adjacent-position squared-differences.
-   If the max mean squared-difference exceeds 50% of the variance threshold,
-   the axis is declared incompressible and the search returns null immediately.
-2. **Gradient-derived candidate restriction**: compute per-axis gradient
-   magnitude `g[i] = max_ch(mean |srgb[i+1] - srgb[i]|)` across the orthogonal
-   axis. Extract edge positions where `g[i] >= max(8/255, P90(g))`. Build
-   restricted candidate sets B and E from `{margin, hiBound} ∪ neighborhood(edge_positions)`.
-   Enumerate only `(b, e)` pairs from `B × E` where `e - b >= 4`, sorted by
-   `len = e - b` descending. If no edges are detected, fall back to
-   stride-sampled candidates (every `L/16` positions).
-3. For each interval, binary-search the smallest N that passes the error
-   threshold (i.e., maximum reconstruction error <= threshold).
-4. Pick the (begin, end, N) tuple with maximum saving = length - N.
-5. Early termination when no remaining pair can beat the current best
-   (`len - 2 <= bestSaving`). The variance pre-filter (`intervalVariance > varianceThreshold`)
-   remains as a secondary gate inside the loop.
+### Stage 1: Segment (1D single-channel)
 
-X and Y passes are independent. If one axis finds no valid split, it falls
-back to identity (full length, no downsampling).
+`Segment(signal, rate, threshold, minLength)` finds all compressible
+segments in a 1D single-channel signal at a given rate:
+
+1. **Phase 1 — whole-signal round-trip**: downsample the entire signal
+   at rate `r`, upsample back, compute per-pixel sRGB error, find
+   contiguous low-error regions (all pixels <= threshold).
+2. **Boundary constraint**: a position `i` is a valid segment boundary
+   iff `|srgb[i] - srgb[i-1]| <= threshold` (adjacent pixel difference
+   within error budget). Shrink candidate endpoints to the nearest valid
+   boundary.
+3. **minLength filter**: discard regions shorter than minLength.
+4. **Phase 2 — per-candidate verification**: for each candidate,
+   independently downsample+upsample the exact interval and verify
+   that all per-pixel errors <= threshold.
+
+### Stage 2: Intersect (multi-channel intersection)
+
+`Intersect(channelSegments, minLength)` computes the geometric intersection
+of segment sets from all 4 channels (R, G, B, A). Since the error metric
+uses max-error semantics, a segment must pass on all channels. The
+intersection naturally excludes regions where channels disagree.
+
+### Stage 3: Squeeze (2D segment finding)
+
+`SqueezeHorizontal/Vertical(image, rate, threshold, minLength)` extends
+1D segments to 2D:
+
+- **Horizontal**: for each row, run Segment per channel → Intersect across
+  channels → intersect all rows' segment sets → filter by minLength.
+- **Vertical**: same but per-column.
+
+This ensures the stretch region is valid for every row/column.
+
+### Stage 4: Optimize (rate search + best segment selection)
+
+`Optimize(image, threshold, minLength, margin)` selects the best segment:
+
+1. Get candidate segments at rate=2 via Squeeze.
+2. For each candidate, search maximum compression rate:
+   - **Coarse search**: rate = 2, 3, 4, ... until round-trip fails.
+   - **Fine search**: binary search between last-passing and first-failing rate.
+3. Select the segment with maximum savings per axis:
+   `savings = length - ceil(length / max_rate)`.
+4. If no segment passes at any rate, return null (identity fallback).
+
+X and Y passes are independent. This is optimal because area savings
+is monotonically increasing in each axis's savings.
 
 ## Auto-retry with increasing margin
 

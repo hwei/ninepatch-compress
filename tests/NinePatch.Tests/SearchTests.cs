@@ -9,7 +9,7 @@ public class SearchTests
     public void SearchX_UniformImage_ShouldFindSplit()
     {
         SoaImage img = CreateImage(100, 100, 128, 128, 128, 255);
-        var result = Search1D.SearchX(img, threshold: 4f, margin: 0);
+        var result = Segmenter.SearchX(img, threshold: 4f, margin: 0);
         Assert.NotNull(result);
         Assert.Equal(0, result.Value.Begin);
         Assert.Equal(100, result.Value.End);
@@ -20,7 +20,7 @@ public class SearchTests
     public void SearchY_UniformImage_ShouldFindSplit()
     {
         SoaImage img = CreateImage(100, 100, 128, 128, 128, 255);
-        var result = Search1D.SearchY(img, threshold: 4f, margin: 0);
+        var result = Segmenter.SearchY(img, threshold: 4f, margin: 0);
         Assert.NotNull(result);
         Assert.Equal(0, result.Value.Begin);
         Assert.Equal(100, result.Value.End);
@@ -30,7 +30,7 @@ public class SearchTests
     public void SearchX_NoiseImage_ShouldFailOrReturnSmallInterval()
     {
         SoaImage img = CreateNoiseImage(20, 20);
-        var result = Search1D.SearchX(img, threshold: 4f, margin: 0);
+        var result = Segmenter.SearchX(img, threshold: 4f, margin: 0);
         if (result is not null)
         {
             Assert.True(result.Value.N < 20);
@@ -41,7 +41,7 @@ public class SearchTests
     public void SearchX_WithMargin_ShouldRespectMargin()
     {
         SoaImage img = CreateImage(100, 100, 128, 128, 128, 255);
-        var result = Search1D.SearchX(img, threshold: 4f, margin: 10);
+        var result = Segmenter.SearchX(img, threshold: 4f, margin: 10);
         Assert.NotNull(result);
         Assert.True(result.Value.Begin >= 10);
         Assert.True(result.Value.End <= 90);

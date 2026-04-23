@@ -333,7 +333,7 @@ public static class Compressor
     /// <summary>Run full pipeline with margin auto-retry.</summary>
     public static CompressResult RunFullPipeline(
         ReadOnlySpan<byte> imgU8, int width, int height,
-        double threshold, int margin = 0)
+        double threshold, int margin = 0, int minLength = 8)
     {
         if (imgU8.Length != width * height * 4)
             return CompressResult.Fail(CompressStatus.InvalidInput,
@@ -345,8 +345,8 @@ public static class Compressor
 
         SoaImage imgLinear = ColorSpace.RgbaU8ToLinear(imgU8, width, height);
 
-        SearchResult1D? resX = Search1D.SearchX(imgLinear, (float)threshold, margin);
-        SearchResult1D? resY = Search1D.SearchY(imgLinear, (float)threshold, margin);
+        SearchResult1D? resX = Segmenter.SearchX(imgLinear, (float)threshold, margin, minLength);
+        SearchResult1D? resY = Segmenter.SearchY(imgLinear, (float)threshold, margin, minLength);
 
         // Auto-retry with increasing margin
         int maxMargin = Math.Min(width, height) / 4;
@@ -358,9 +358,9 @@ public static class Compressor
             {
                 curMargin += marginStep;
                 if (resX is null)
-                    resX = Search1D.SearchX(imgLinear, (float)threshold, curMargin);
+                    resX = Segmenter.SearchX(imgLinear, (float)threshold, curMargin, minLength);
                 if (resY is null)
-                    resY = Search1D.SearchY(imgLinear, (float)threshold, curMargin);
+                    resY = Segmenter.SearchY(imgLinear, (float)threshold, curMargin, minLength);
                 if (resX is not null && resY is not null) break;
             }
         }
