@@ -11,6 +11,26 @@ The system SHALL accept raw RGBA pixel data (sRGB encoded, straight alpha) and r
 - **WHEN** RGBA byte count does not match width × height × 4
 - **THEN** system returns CompressStatus.InvalidInput
 
+### Requirement: Core compression uses Segment→Intersect→Squeeze→Optimize pipeline
+The system SHALL use the four-stage pipeline: Segment (1D single-channel candidate finding), Intersect (multi-channel set intersection), Squeeze (2D cross-row/column consensus), and Optimize (coarse-then-fine rate search). The public API (NinePatchCompressor.Compress) SHALL accept a `minLength` parameter with default value 8. The output format (CompressResult with NinePatchMeta) SHALL remain unchanged.
+
+#### Scenario: Public API gains minLength parameter
+- **WHEN** NinePatchCompressor.Compress is called with rgba, width, height, threshold, margin, minLength
+- **THEN** minLength defaults to 8 if not specified
+- **AND** the parameter propagates through Segment, Intersect, and Squeeze
+
+#### Scenario: minLength not specified uses default
+- **WHEN** NinePatchCompressor.Compress is called without minLength
+- **THEN** minLength=8 is used
+
+#### Scenario: Output metadata format unchanged
+- **WHEN** compression succeeds
+- **THEN** NinePatchMeta contains Xb, Xe, Yb, Ye, Nx, Ny, OriginalW, OriginalH, CompressedW, CompressedH, SavingsPct, ErrorX, ErrorY, Error2d
+
+#### Scenario: Margin parameter controls minimum corner size
+- **WHEN** margin > 0 is specified
+- **THEN** segment boundaries SHALL be constrained to [margin, length-margin)
+
 ### Requirement: Color space conversion accuracy
 The system SHALL convert between sRGB and linear RGB space with error less than 1/255 per channel.
 
@@ -47,39 +67,27 @@ The system SHALL compute maximum per-channel error in sRGB space, in [0,255] sca
 - **WHEN** alpha values differ between original and reconstructed
 - **THEN** error SHALL be |a_orig - a_recon| * 255 (no round-first, alpha is linear)
 
-### Requirement: 1D search finds minimal N
-The system SHALL binary-search for the smallest compressed size N that meets error threshold.
+### Requirement: Optimize searches maximum compression rate per segment
+The system SHALL find the maximum compression rate (smallest N such that round-trip error ≤ threshold) using coarse-then-fine search: rate = 2, 3, 4, ... until failure, then binary search between last-passing and first-failing rate.
 
-#### Scenario: Valid split found
-- **WHEN** a valid nine-patch split exists within error threshold
-- **THEN** system returns SearchResult1D with (begin, end, N)
+#### Scenario: Segment passes at 2x only
+- **WHEN** a segment of length 100 passes round-trip at rate=2 but fails at rate=3
+- **THEN** maximum rate is 2, N = 50
 
-#### Scenario: No valid split
-- **WHEN** binary search finds no N in [2, maxN] that passes threshold, for all candidate intervals
-- **THEN** system returns null (search_1d) or CompressStatus.NoValidSplit (compress)
+#### Scenario: Segment fails at minimum rate
+- **WHEN** a segment fails round-trip even at rate=2
+- **THEN** the segment is excluded from optimization results
 
-#### Scenario: One-way compression with identity fallback
-- **WHEN** a valid split exists in only one axis (X or Y)
-- **THEN** system uses the found split for that axis and falls back to identity
-  (`begin=0, end=full_len, N=full_len`) for the other axis
-- **AND** compression proceeds to savings check and reconstruction as normal
+### Requirement: Optimize selects best segment per axis independently
+For each axis (X and Y), the system SHALL select the segment with maximum savings = segment_length - ceil(segment_length / max_rate). X and Y axes SHALL be optimized independently.
 
-#### Scenario: Binary search converges on smallest valid N
-- **WHEN** multiple values of N pass the error threshold for a candidate interval
-- **THEN** binary search converges to the smallest N that passes
-- **AND** if no N in [2, maxN] passes, the interval is skipped without spatial shrink
+#### Scenario: Single segment per axis
+- **WHEN** each axis has exactly one segment
+- **THEN** that segment is selected regardless of savings
 
-### Requirement: Search1D pre-filters high-variance axes before main loop
-Before enumerating candidate intervals, `Search1D.Run()` SHALL evaluate whether the entire axis is incompressible by computing the mean squared-difference between adjacent positions (columns for X axis, rows for Y axis). If the maximum mean squared-difference across all channels exceeds 50% of the variance threshold, the axis SHALL be declared incompressible and the search SHALL return null immediately without visiting any candidate intervals.
-
-#### Scenario: Noisy axis is rejected early
-- **WHEN** an axis has high-frequency noise causing adjacent-position differences to exceed 50% of the variance threshold
-- **THEN** `Search1D.Run()` SHALL return null
-- **AND** no candidate intervals SHALL be evaluated
-
-#### Scenario: Smooth axis proceeds to main search
-- **WHEN** an axis has low adjacent-position variance
-- **THEN** `Search1D.Run()` SHALL proceed to the full interval enumeration and binary search
+#### Scenario: No valid segment on one axis
+- **WHEN** no horizontal segment passes at any rate
+- **THEN** X axis falls back to identity (begin=0, end=width, N=width)
 
 ### Requirement: Auto-retry with increasing margin
 The system SHALL automatically retry with increasing margin when margin=0 fails. The retry loop SHALL iterate margin from step to min(W,H)/4. Within each step, only axes that previously returned null SHALL be retried. The loop SHALL terminate only when both axes find a valid split, or when maxMargin is reached.
@@ -120,58 +128,13 @@ Callers are responsible for deciding whether the savings are acceptable.
 - **THEN** system still returns Success with valid compressed data and metadata
 - **AND** callers can inspect meta.SavingsPct to decide whether to use the result
 
-### Requirement: Search1D TryN performs row-bounded verification with early exit
-The internal `TryN` verification path inside `Search1D` SHALL process reconstruction and error checking at the granularity of **one row (X axis) or one column block of width `Vector<float>.Count` (Y axis)** at a time, and SHALL return `false` immediately upon finding the first pixel whose sRGB error (alpha-weighted per the error-metric rules) exceeds the threshold. The verification SHALL be mathematically equivalent to the full-image path in result, for every `(b, e, N)` input.
+### Requirement: 2D error is reported but does not affect compression decisions
+The system SHALL compute and report 2D reconstruction error in the result metadata. The compression rate and segment selection SHALL NOT be adjusted based on 2D error. Users can adjust the threshold parameter and rerun if 2D error is unsatisfactory.
 
-#### Scenario: Row-wise early exit on first failing row (X axis)
-- **WHEN** `Search1D.Run` evaluates a candidate `(b, e, N)` along axis X, and row `k` is the smallest row index such that the reconstruction at some pixel in that row's `[b..e]` region exceeds threshold
-- **THEN** `TryN` SHALL return `false`
-- **AND** `TryN` SHALL NOT invoke Resampler or sRGB-diff work on any row with index `> k`
+#### Scenario: High 2D error is reported
+- **WHEN** the 2D reconstruction error exceeds the threshold
+- **THEN** the result still reports Success with the measured Error2d value
 
-#### Scenario: Column-block early exit on Y axis
-- **WHEN** `Search1D.Run` evaluates a candidate `(b, e, N)` along axis Y, and the leftmost column block `[x0..x0+vecLen)` containing a failing pixel is at index `x0 = k`
-- **THEN** `TryN` SHALL return `false`
-- **AND** subsequent column blocks at `x >= k + vecLen` SHALL NOT be processed
-
-#### Scenario: Full-pass equivalence with exhaustive path
-- **WHEN** a candidate `(b, e, N)` is evaluated under both the row-bounded early-exit path and a reference full-image `PassesThreshold` path using identical inputs and the same `PrecomputedSrgb`
-- **THEN** both paths SHALL return the same boolean verdict
-
-#### Scenario: Final SearchResult1D is unchanged
-- **WHEN** `Search1D.SearchX` or `Search1D.SearchY` is invoked on any `SoaImage` with any valid threshold and margin
-- **THEN** the returned `SearchResult1D?` SHALL be byte-for-byte identical to the result produced by the pre-change exhaustive implementation
-
-### Requirement: Search1D error comparison is bounded to the dirty region
-The verification path inside `Search1D.TryN` SHALL compare reconstructed pixels against precomputed sRGB original only within the candidate region (`[b..e]` columns for X axis, `[b..e]` rows for Y axis); pixels outside this region SHALL NOT participate in the threshold check.
-
-#### Scenario: Outside-region pixels are not inspected
-- **WHEN** `TryN(b, e, N, axis=1)` runs
-- **THEN** no pixel at column index `c < b` or `c >= e` SHALL be read from `recon` or `origSrgb` for the purpose of error comparison
-
-#### Scenario: Outside-region recon contents cannot affect the verdict
-- **WHEN** two runs of `TryN(b, e, N)` differ only in the values of `recon` pixels at columns outside `[b..e]`
-- **THEN** both runs SHALL return the same boolean verdict
-
-### Requirement: Search1D scratch buffers track partial dirty state across calls
-`Search1D` SHALL track which portion of `recon` was actually written by the previous `TryN` invocation, including the case where that invocation exited early and only wrote a prefix of rows (X axis) or column blocks (Y axis). Before the next `TryN` writes, only the actually-written portion SHALL be restored to the original image data.
-
-#### Scenario: Early-exit leaves only a prefix dirty
-- **WHEN** a `TryN` call writes rows `[0..k)` and returns `false` at row `k`
-- **THEN** the scratch state SHALL record the dirty region as `[b..e] × [0..k)` (and not the full `[b..e] × [0..H)`)
-
-#### Scenario: Subsequent TryN restores only the recorded dirty region
-- **WHEN** the next `TryN` invocation begins
-- **THEN** it SHALL restore exactly the previously-recorded dirty region from the original image
-- **AND** pixels outside that recorded region SHALL be assumed already equal to the original image
-
-#### Scenario: Repeated TryN calls produce consistent results
-- **WHEN** the same `TryN(b, e, N)` inputs are evaluated back-to-back, with any sequence of unrelated `TryN` calls interleaved before them
-- **THEN** each invocation SHALL return the same boolean verdict as an isolated single call on a fresh scratch buffer
-
-### Requirement: Search1D TryN is preceded by variance-based pre-filter check
-Before invoking `TryN` for any candidate interval `(b, e, N)`, `Search1D.Run()` SHALL first check whether the interval's variance exceeds the precomputed threshold from the variance-pre-filter capability. If it does, the interval SHALL be skipped and `TryN` SHALL NOT be called. This pre-filter is an optimization that MUST NOT change the final `SearchResult1D?` output.
-
-#### Scenario: Pre-filter skips TryN on noise interval
-- **WHEN** `Run()` evaluates candidate `(b, e)` and the interval variance exceeds `globalVariance × 3.0`
-- **THEN** `TryN(b, e, N)` SHALL NOT be invoked for any `N`
-- **AND** the overall `SearchResult1D?` output SHALL be identical to the path where the pre-filter was not applied
+#### Scenario: 2D error does not trigger retry
+- **WHEN** 2D error is above threshold
+- **THEN** no automatic adjustment or retry occurs
