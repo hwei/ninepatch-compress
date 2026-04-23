@@ -208,7 +208,8 @@ public class SegmenterTests
         Assert.NotNull(result);
         Assert.Equal(0, result.Value.Begin);
         Assert.Equal(100, result.Value.End);
-        Assert.True(result.Value.N >= 2); // rate should be at least 2
+        // Uniform image: segment should compress to many fewer pixels than original length.
+        Assert.True(result.Value.N < 100, $"Expected compression, got N={result.Value.N}");
     }
 
     [Fact]
@@ -235,8 +236,8 @@ public class SegmenterTests
         var img = CreateUniformImage(64, 32, 128, 128, 128, 255);
         var result = Segmenter.OptimizeHorizontal(img, threshold: 4f, minLength: 8);
         Assert.NotNull(result);
-        // Uniform image should support high compression rate
-        Assert.True(result.Value.N >= 4);
+        // Uniform 64-wide image supports rate=16 (maxRate), so target length = ceil(64/16) = 4.
+        Assert.True(result.Value.N <= 8, $"Expected high compression, got N={result.Value.N}");
     }
 
     [Fact]

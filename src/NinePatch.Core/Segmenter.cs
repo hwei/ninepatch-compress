@@ -2,7 +2,11 @@ using System.Numerics;
 
 namespace NinePatch.Core;
 
-/// <summary>Result of a 1D nine-patch search: compressible region [Begin,End) at rate N.</summary>
+/// <summary>
+/// Result of a 1D nine-patch search: compressible region [Begin,End) whose stretch
+/// segment of length (End-Begin) will be downsampled to N pixels in the compressed
+/// texture. N == End-Begin means identity (no compression on this axis).
+/// </summary>
 public readonly record struct SearchResult1D(int Begin, int End, int N);
 
 /// <summary>
@@ -310,11 +314,12 @@ public static class Segmenter
             int maxPassingRate = SearchRateForSegment(signals, origSrgb, sLen, threshold, maxRate);
             if (maxPassingRate < 2) continue;
 
-            int savings = sLen - (int)MathF.Ceiling((float)sLen / maxPassingRate);
+            int targetLen = (int)MathF.Ceiling((float)sLen / maxPassingRate);
+            int savings = sLen - targetLen;
             if (savings > bestSavings)
             {
                 bestSavings = savings;
-                best = new SearchResult1D(b, e, maxPassingRate);
+                best = new SearchResult1D(b, e, targetLen);
             }
         }
 

@@ -61,6 +61,42 @@ public class IntegrationTests
     }
 
     [Fact]
+    public void FullPipeline_NonUniformOptimizable_ShouldRespectErrorThreshold()
+    {
+        // Regression: SearchResult1D.N must be interpreted as target pixel count, not rate.
+        // Prior to the fix, Optimize stored rate (e.g. 2) but Compressor read it as target
+        // length, producing wildly over-compressed output with error far above threshold.
+        // This test uses an image whose interior is uniform but whose edges carry a hard
+        // frame — Optimize finds a non-trivial compressible interior segment on both axes
+        // with rate >= 2, so N_stored_as_rate would collapse the center to ~2 pixels and
+        // blow up Error2d. A correct N (target length) keeps reconstruction within threshold.
+        int w = 64, h = 64;
+        var img = new byte[w * h * 4];
+        for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+        {
+            bool frame = x < 4 || x >= w - 4 || y < 4 || y >= h - 4;
+            byte v = (byte)(frame ? 40 : 200);
+            int i = (y * w + x) * 4;
+            img[i] = v; img[i + 1] = v; img[i + 2] = v; img[i + 3] = 255;
+        }
+
+        const double threshold = 4.0;
+        var result = NinePatchCompressor.Compress(img, w, h, threshold);
+
+        Assert.Equal(CompressStatus.Success, result.Status);
+        Assert.NotNull(result.Meta);
+        var meta = result.Meta!.Value;
+
+        // Meaningful compression happened on both axes (not identity fallback).
+        Assert.True(meta.CompressedW < w, $"X axis did not compress: compressedW={meta.CompressedW}");
+        Assert.True(meta.CompressedH < h, $"Y axis did not compress: compressedH={meta.CompressedH}");
+
+        // And the reconstruction error stays within the threshold.
+        Assert.True(meta.Error2d <= threshold, $"Error2d={meta.Error2d} exceeds threshold={threshold}");
+    }
+
+    [Fact]
     public void FullPipeline_TransparentImage_ShouldHandleAlpha()
     {
         byte[] img = CreateImageU8(50, 50, 255, 0, 0, 0); // fully transparent
