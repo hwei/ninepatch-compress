@@ -25,6 +25,30 @@ public readonly record struct SoaImage(
 
     /// <summary>Index into any channel array: y * Width + x.</summary>
     public int Index(int x, int y) => y * Width + x;
+
+    /// <summary>Return a new SoaImage with rows and columns swapped (Width↔Height).</summary>
+    public SoaImage Transpose()
+    {
+        int w = Width, h = Height;
+        var rT = new float[w * h];
+        var gT = new float[w * h];
+        var bT = new float[w * h];
+        var aT = new float[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            int rowBase = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                int src = rowBase + x;
+                int dst = x * h + y;
+                rT[dst] = R[src];
+                gT[dst] = G[src];
+                bT[dst] = B[src];
+                aT[dst] = A[src];
+            }
+        }
+        return new SoaImage(rT, gT, bT, aT) { Width = h, Height = w };
+    }
 }
 
 /// <summary>

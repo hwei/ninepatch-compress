@@ -274,56 +274,35 @@ public static class Compressor
         return result;
     }
 
-    /// <summary>Quick error check: downsample to 2 pixels, upsample back, measure.</summary>
-    private static float BoundaryError(SoaImage img, int b, int e, int axis)
+    /// <summary>
+    /// Quick X-axis error check: extract [b,e) columns × full height, downsample X to 2,
+    /// upsample back, measure. Caller transposes the image for Y-axis checks.
+    /// </summary>
+    private static float BoundaryErrorX(SoaImage img, int b, int e)
     {
         int len = e - b;
+        int h = img.Height;
 
-        // Extract region per channel
         float[][] region = new float[4][];
-        int rw, rh;
-
-        if (axis == 1)
+        for (int ch = 0; ch < 4; ch++)
         {
-            rw = len; rh = img.Height;
-            for (int ch = 0; ch < 4; ch++)
-            {
-                region[ch] = new float[len * img.Height];
-                var chData = GetChannel(img, ch);
-                for (int y = 0; y < img.Height; y++)
-                    Buffer.BlockCopy(chData, (y * img.Width + b) * 4, region[ch], y * len * 4, len * 4);
-            }
-        }
-        else
-        {
-            rw = img.Width; rh = len;
-            for (int ch = 0; ch < 4; ch++)
-            {
-                var chData = GetChannel(img, ch);
-                region[ch] = new float[img.Width * len];
-                for (int y = b; y < e; y++)
-                    Buffer.BlockCopy(chData, y * img.Width * 4, region[ch], (y - b) * img.Width * 4, img.Width * 4);
-            }
+            region[ch] = new float[len * h];
+            var chData = GetChannel(img, ch);
+            for (int y = 0; y < h; y++)
+                Buffer.BlockCopy(chData, (y * img.Width + b) * 4, region[ch], y * len * 4, len * 4);
         }
 
         var regionSoa = new SoaImage(region[0], region[1], region[2], region[3])
         {
-            Width = rw,
-            Height = rh,
+            Width = len,
+            Height = h,
         };
 
-        // Downsample to 2 then upsample
-        float[][] down = new float[4][];
-        for (int ch = 0; ch < 4; ch++)
-            down[ch] = Resampler.Downsample1D(region[ch], rw, rh, 2, axis);
-
-        int downW = axis == 1 ? 2 : rw;
-        int downH = axis == 1 ? rh : 2;
-
-        var upSoa = SoaImage.Create(rw, rh);
+        var upSoa = SoaImage.Create(len, h);
         for (int ch = 0; ch < 4; ch++)
         {
-            var up = Resampler.Upsample1D(down[ch], downW, downH, len, axis);
+            var down = Resampler.Downsample1D(region[ch], len, h, 2, axis: 1);
+            var up = Resampler.Upsample1D(down, 2, h, len, axis: 1);
             SetChannel(ref upSoa, ch, up);
         }
 
@@ -375,8 +354,8 @@ public static class Compressor
         // Boundary errors
         meta = meta with
         {
-            ErrorX = BoundaryError(imgLinear, finalX.Begin, finalX.End, 1),
-            ErrorY = BoundaryError(imgLinear, finalY.Begin, finalY.End, 0)
+            ErrorX = BoundaryErrorX(imgLinear, finalX.Begin, finalX.End),
+            ErrorY = BoundaryErrorX(imgLinear.Transpose(), finalY.Begin, finalY.End)
         };
 
         // Reconstruct and measure 2D error

@@ -179,15 +179,6 @@ public class SegmenterTests
     }
 
     [Fact]
-    public void SqueezeVertical_UniformImage_ShouldFindFullHeightSegment()
-    {
-        var img = CreateUniformImage(50, 100, 128, 128, 128, 255);
-        var segments = Segmenter.SqueezeVertical(img, rate: 2, threshold: 4f, minLength: 8);
-        Assert.Single(segments);
-        Assert.Equal((0, 100), segments[0]);
-    }
-
-    [Fact]
     public void SqueezeHorizontal_AllRowsAgree_ShouldReturnSegment()
     {
         // Gradient that is consistent across all rows

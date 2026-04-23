@@ -280,89 +280,23 @@ public static class Segmenter
         return Intersect(chSegments, minLength);
     }
 
-    /// <summary>
-    /// Find vertical compressible segments: per-column Segment per channel →
-    /// Intersect → intersect all columns' segment sets → minLength filter.
-    /// </summary>
-    public static List<(int begin, int end)> SqueezeVertical(
-        SoaImage img, int rate, float threshold, int minLength,
-        int marginL = 0, int marginR = -1)
-    {
-        if (marginR < 0) marginR = img.Height;
-        int width = img.Width;
-        int height = img.Height;
-
-        var channels = new[] { img.R, img.G, img.B, img.A };
-
-        if (width == 0) return [];
-
-        // Intersect first column's channels as the initial result
-        var result = IntersectChannelsForColumn(img, 0, rate, threshold, minLength, marginL, marginR, channels);
-        if (result.Count == 0) return [];
-
-        // Intersect with each subsequent column
-        for (int x = 1; x < width; x++)
-        {
-            var colSegs = IntersectChannelsForColumn(img, x, rate, threshold, minLength, marginL, marginR, channels);
-            result = IntersectTwoSets(result, colSegs);
-            if (result.Count == 0) return [];
-        }
-
-        return result.Where(s => s.Item2 - s.Item1 >= minLength).ToList();
-    }
-
-    private static List<(int, int)> IntersectChannelsForColumn(
-        SoaImage img, int x, int rate, float threshold, int minLength,
-        int marginL, int marginR, float[][] channels)
-    {
-        int height = img.Height;
-        int width = img.Width;
-        var chSegments = new List<List<(int begin, int end)>>(4);
-        foreach (var ch in channels)
-        {
-            var col = new float[height];
-            for (int y = 0; y < height; y++)
-                col[y] = ch[y * width + x];
-            var segs = Segment(col, rate, threshold, minLength, marginL, marginR);
-            chSegments.Add(segs);
-        }
-        return Intersect(chSegments, minLength);
-    }
-
     // ---- Optimize: max compression rate search + best segment selection ----
 
     /// <summary>
-    /// For a given axis, find the best compressible segment with maximum rate.
+    /// Find the best compressible horizontal segment with maximum rate.
     /// Returns null if no segment passes at any rate (identity fallback).
     /// </summary>
     public static SearchResult1D? OptimizeHorizontal(
         SoaImage img, float threshold, int minLength = 8,
         int margin = 0, int maxRate = 16)
     {
-        return OptimizeAxis(img, threshold, minLength, margin, maxRate, isHorizontal: true);
-    }
-
-    public static SearchResult1D? OptimizeVertical(
-        SoaImage img, float threshold, int minLength = 8,
-        int margin = 0, int maxRate = 16)
-    {
-        return OptimizeAxis(img, threshold, minLength, margin, maxRate, isHorizontal: false);
-    }
-
-    private static SearchResult1D? OptimizeAxis(
-        SoaImage img, float threshold, int minLength, int margin, int maxRate, bool isHorizontal)
-    {
-        int len = isHorizontal ? img.Width : img.Height;
+        int len = img.Width;
         int marginL = margin;
         int marginR = len - margin;
 
         if (marginR - marginL < minLength) return null;
 
-        // Get candidate segments at rate=2
-        var segments = isHorizontal
-            ? SqueezeHorizontal(img, 2, threshold, minLength, marginL, marginR)
-            : SqueezeVertical(img, 2, threshold, minLength, marginL, marginR);
-
+        var segments = SqueezeHorizontal(img, 2, threshold, minLength, marginL, marginR);
         if (segments.Count == 0) return null;
 
         SearchResult1D? best = null;
@@ -371,7 +305,7 @@ public static class Segmenter
         foreach (var (b, e) in segments)
         {
             int sLen = e - b;
-            var (signals, _, _) = ExtractAxisSignals(img, b, e, isHorizontal);
+            var signals = ExtractHorizontalSignals(img, b, e);
             var origSrgb = signals.Select(s => ComputeSrgbArray(s)).ToArray();
             int maxPassingRate = SearchRateForSegment(signals, origSrgb, sLen, threshold, maxRate);
             if (maxPassingRate < 2) continue;
@@ -388,43 +322,25 @@ public static class Segmenter
     }
 
     /// <summary>
-    /// Extract 1D signals for all channels along an axis segment.
-    /// Horizontal: signals[ch][y * segLen + x] for x in [b,e), y in [0,height)
-    /// Vertical: signals[ch][(y-b) * width + x] for y in [b,e), x in [0,width)
+    /// Extract 1D horizontal signals for all channels along segment [b, e).
+    /// signals[ch][y * segLen + x] for x in [b,e), y in [0,height). Seg axis is contiguous.
     /// </summary>
-    private static (float[][] signals, int segLen, int orthoLen) ExtractAxisSignals(
-        SoaImage img, int b, int e, bool isHorizontal)
+    private static float[][] ExtractHorizontalSignals(SoaImage img, int b, int e)
     {
         int segLen = e - b;
+        int orthoLen = img.Height;
+        int w = img.Width;
         var channels = new[] { img.R, img.G, img.B, img.A };
         var signals = new float[4][];
 
-        if (isHorizontal)
+        for (int ch = 0; ch < 4; ch++)
         {
-            int orthoLen = img.Height;
-            for (int ch = 0; ch < 4; ch++)
-            {
-                signals[ch] = new float[segLen * orthoLen];
-                var src = channels[ch];
-                int w = img.Width;
-                for (int y = 0; y < orthoLen; y++)
-                    Buffer.BlockCopy(src, (y * w + b) * 4, signals[ch], y * segLen * 4, segLen * 4);
-            }
-            return (signals, segLen, orthoLen);
+            signals[ch] = new float[segLen * orthoLen];
+            var src = channels[ch];
+            for (int y = 0; y < orthoLen; y++)
+                Buffer.BlockCopy(src, (y * w + b) * 4, signals[ch], y * segLen * 4, segLen * 4);
         }
-        else
-        {
-            int orthoLen = img.Width;
-            for (int ch = 0; ch < 4; ch++)
-            {
-                signals[ch] = new float[segLen * orthoLen];
-                var src = channels[ch];
-                int w = img.Width;
-                for (int y = b; y < e; y++)
-                    Buffer.BlockCopy(src, y * w * 4, signals[ch], (y - b) * w * 4, w * 4);
-            }
-            return (signals, segLen, orthoLen);
-        }
+        return signals;
     }
 
     /// <summary>
@@ -524,15 +440,21 @@ public static class Segmenter
         return true;
     }
 
-    // ---- Convenience wrappers (replace Search1D.SearchX/SearchY) ----
+    // ---- Convenience wrappers ----
 
     public static SearchResult1D? SearchX(SoaImage img, float threshold, int minLength = 8, int margin = 0)
     {
         return OptimizeHorizontal(img, threshold, minLength, margin);
     }
 
+    /// <summary>
+    /// Y-axis search: transpose the image and reuse the X path. This guarantees
+    /// X/Y symmetry at the mechanism level — a single code path, a single set of bugs.
+    /// Returned Begin/End/N are in the original Y coordinate space (transposition is
+    /// an involution on coordinate values along the searched axis).
+    /// </summary>
     public static SearchResult1D? SearchY(SoaImage img, float threshold, int minLength = 8, int margin = 0)
     {
-        return OptimizeVertical(img, threshold, minLength, margin);
+        return OptimizeHorizontal(img.Transpose(), threshold, minLength, margin);
     }
 }
