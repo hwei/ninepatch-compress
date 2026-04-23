@@ -345,8 +345,8 @@ public static class Compressor
 
         SoaImage imgLinear = ColorSpace.RgbaU8ToLinear(imgU8, width, height);
 
-        SearchResult1D? resX = Segmenter.SearchX(imgLinear, (float)threshold, margin, minLength);
-        SearchResult1D? resY = Segmenter.SearchY(imgLinear, (float)threshold, margin, minLength);
+        SearchResult1D? resX = Segmenter.SearchX(imgLinear, (float)threshold, minLength, margin);
+        SearchResult1D? resY = Segmenter.SearchY(imgLinear, (float)threshold, minLength, margin);
 
         // Auto-retry with increasing margin
         int maxMargin = Math.Min(width, height) / 4;
@@ -358,9 +358,9 @@ public static class Compressor
             {
                 curMargin += marginStep;
                 if (resX is null)
-                    resX = Segmenter.SearchX(imgLinear, (float)threshold, curMargin, minLength);
+                    resX = Segmenter.SearchX(imgLinear, (float)threshold, minLength, curMargin);
                 if (resY is null)
-                    resY = Segmenter.SearchY(imgLinear, (float)threshold, curMargin, minLength);
+                    resY = Segmenter.SearchY(imgLinear, (float)threshold, minLength, curMargin);
                 if (resX is not null && resY is not null) break;
             }
         }

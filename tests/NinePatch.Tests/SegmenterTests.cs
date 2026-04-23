@@ -248,6 +248,38 @@ public class SegmenterTests
         Assert.True(result.Value.N >= 4);
     }
 
+    [Fact]
+    public void Intersect_EmptyChannelList_ShouldReturnEmpty()
+    {
+        var channels = new List<List<(int, int)>>();
+        var result = Segmenter.Intersect(channels, minLength: 1);
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void Intersect_AlphaChannelDisagreement_ShouldRejectRegion()
+    {
+        // Directly test Intersect: if alpha channel disagrees, the region is rejected
+        var rgb = new List<(int, int)> { (0, 100) };
+        var alpha = new List<(int, int)> { (0, 40), (60, 100) };
+        var channels = new List<List<(int, int)>> { rgb, rgb, rgb, alpha };
+
+        var result = Segmenter.Intersect(channels, minLength: 5);
+        // Intersection should produce two segments: (0,40) and (60,100)
+        Assert.Equal(2, result.Count);
+        Assert.Equal((0, 40), result[0]);
+        Assert.Equal((60, 100), result[1]);
+    }
+
+    [Fact]
+    public void SearchX_MarginAndMinLengthBoundary_ShouldReturnNull()
+    {
+        var img = CreateUniformImage(20, 20, 128, 128, 128, 255);
+        // margin * 2 + minLength > dimension should return null
+        var result = Segmenter.SearchX(img, threshold: 4f, minLength: 15, margin: 5);
+        Assert.Null(result);
+    }
+
     // ---- Helper ----
 
     private static SoaImage CreateUniformImage(int w, int h, byte r, byte g, byte b, byte a)

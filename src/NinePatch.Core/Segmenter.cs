@@ -365,16 +365,14 @@ public static class Segmenter
 
         if (segments.Count == 0) return null;
 
-        // Extract 1D signals for all channels for rate search
-        var (signals, segLen, orthoLen) = ExtractAxisSignals(img, segments[0].begin, segments[0].end, isHorizontal);
-        var origSrgb = signals.Select(s => ComputeSrgbArray(s)).ToArray();
-
         SearchResult1D? best = null;
         int bestSavings = 0;
 
         foreach (var (b, e) in segments)
         {
             int sLen = e - b;
+            var (signals, _, _) = ExtractAxisSignals(img, b, e, isHorizontal);
+            var origSrgb = signals.Select(s => ComputeSrgbArray(s)).ToArray();
             int maxPassingRate = SearchRateForSegment(signals, origSrgb, sLen, threshold, maxRate);
             if (maxPassingRate < 2) continue;
 
@@ -442,7 +440,7 @@ public static class Segmenter
 
         for (int rate = 2; rate <= maxRate; rate++)
         {
-            if (VerifyRate1D(signals, origSrgb, rate, threshold, segLen, isHorizontal: true))
+            if (VerifyRate1D(signals, origSrgb, rate, threshold, segLen))
                 lastPassing = rate;
             else
             {
@@ -458,7 +456,7 @@ public static class Segmenter
         while (hi - lo > 1)
         {
             int mid = (lo + hi) / 2;
-            if (VerifyRate1D(signals, origSrgb, mid, threshold, segLen, isHorizontal: true))
+            if (VerifyRate1D(signals, origSrgb, mid, threshold, segLen))
                 lo = mid;
             else
                 hi = mid;
@@ -473,7 +471,7 @@ public static class Segmenter
     /// </summary>
     private static bool VerifyRate1D(
         float[][] signals, float[][] origSrgb, int rate, float threshold,
-        int segLen, bool isHorizontal)
+        int segLen)
     {
         int orthoLen = signals[0].Length / segLen;
         int dstLen = Math.Max(1, segLen / rate);
@@ -528,12 +526,12 @@ public static class Segmenter
 
     // ---- Convenience wrappers (replace Search1D.SearchX/SearchY) ----
 
-    public static SearchResult1D? SearchX(SoaImage img, float threshold, int margin = 0, int minLength = 8)
+    public static SearchResult1D? SearchX(SoaImage img, float threshold, int minLength = 8, int margin = 0)
     {
         return OptimizeHorizontal(img, threshold, minLength, margin);
     }
 
-    public static SearchResult1D? SearchY(SoaImage img, float threshold, int margin = 0, int minLength = 8)
+    public static SearchResult1D? SearchY(SoaImage img, float threshold, int minLength = 8, int margin = 0)
     {
         return OptimizeVertical(img, threshold, minLength, margin);
     }
