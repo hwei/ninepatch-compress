@@ -38,6 +38,7 @@ export function useCompressor(): UseCompressorReturn {
         imageData.height,
         params.threshold,
         params.margin,
+        params.minLength,
       );
       setResult(res);
     } catch (e: unknown) {

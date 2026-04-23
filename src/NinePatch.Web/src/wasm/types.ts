@@ -27,4 +27,5 @@ export interface CompressResult {
 export interface CompressParams {
   threshold: number;
   margin: number;
+  minLength: number;
 }
