@@ -10,25 +10,26 @@ public class DebugTests
     public void CheckBoundaryErrorSizes()
     {
         byte[] img = CreateImageU8(100, 100, 128, 128, 128, 255);
-        SoaImage imgLinear = ColorSpace.RgbaU8ToLinear(img, 100, 100);
+        SoaImageLinear imgLinear = ColorSpace.DecodeSrgbRgba8ToLinear(img, 100, 100);
+        SoaImagePremul imgPremul = ColorSpace.Premultiply(imgLinear);
 
-        var resX = Segmenter.SearchX(imgLinear, threshold: 4f);
+        var resX = Segmenter.SearchX(imgPremul, threshold: 4f);
         Assert.NotNull(resX);
 
-        var resY = Segmenter.SearchY(imgLinear, threshold: 4f);
+        var resY = Segmenter.SearchY(imgPremul, threshold: 4f);
         Assert.NotNull(resY);
 
         // Now run Compress2D
-        var (compressed, meta) = Compressor.Compress2D(imgLinear, resX.Value, resY.Value);
-        Assert.NotNull(compressed);
+        var (compressed, meta) = Compressor.Compress2D(imgPremul, resX.Value, resY.Value);
         Assert.True(meta.Nx >= 2, $"Expected Nx >= 2, got {meta.Nx}");
         Assert.True(meta.Ny >= 2, $"Expected Ny >= 2, got {meta.Ny}");
 
         // Now reconstruct
-        SoaImage recon = Compressor.ReconstructStretched(compressed, meta);
-        Assert.Equal(imgLinear.PixelCount, recon.PixelCount);
+        SoaImagePremul recon = Compressor.ReconstructStretched(compressed, meta);
+        Assert.Equal(imgPremul.PixelCount, recon.PixelCount);
 
-        float err = ErrorMetric.MaxError(imgLinear, recon);
+        SoaImagePremulSrgb origSrgb = ColorSpace.ToPremulSrgb(imgPremul);
+        float err = ErrorMetric.MaxError(origSrgb, recon);
         Assert.True(err <= 4f);
 
         // Now try BoundaryError via the full pipeline
@@ -41,17 +42,7 @@ public class DebugTests
     {
         // Test the BoundaryError guard that returns 999f
         int w = 128, h = 96;
-        SoaImage img = SoaImage.Create(w, h);
-        // Simple gradient
-        for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++)
-        {
-            int i = y * w + x;
-            img.R[i] = x / (float)w;
-            img.G[i] = y / (float)h;
-            img.B[i] = 0.5f;
-            img.A[i] = 1.0f;
-        }
+        SoaImagePremul img = CreateGradientPremul(w, h);
 
         // Test both b=20,e=74 (len=54) and b=20,e=76 (len=56)
         TestBoundary(img, w, h, 20, 74, 0);
@@ -59,7 +50,7 @@ public class DebugTests
         TestBoundary(img, w, h, 20, 108, 1); // X axis
     }
 
-    private static void TestBoundary(SoaImage img, int w, int h, int b, int e, int axis)
+    private static void TestBoundary(SoaImagePremul img, int w, int h, int b, int e, int axis)
     {
         int len = e - b;
         int rw, rh;
@@ -89,7 +80,7 @@ public class DebugTests
             }
         }
 
-        var regionSoa = new SoaImage(region[0], region[1], region[2], region[3]) { Width = rw, Height = rh };
+        var regionSoa = new SoaImagePremul(region[0], region[1], region[2], region[3]) { Width = rw, Height = rh };
 
         float[][] down = new float[4][];
         for (int ch = 0; ch < 4; ch++)
@@ -98,7 +89,7 @@ public class DebugTests
         int downW = axis == 1 ? 2 : rw;
         int downH = axis == 1 ? rh : 2;
 
-        var up = SoaImage.Create(rw, rh);
+        var up = SoaImagePremul.Create(rw, rh);
         for (int ch = 0; ch < 4; ch++)
         {
             var upCh = Resampler.Upsample1D(down[ch], downW, downH, len, axis);
@@ -117,7 +108,8 @@ public class DebugTests
         }
         else
         {
-            float err = ErrorMetric.MaxError(regionSoa, up);
+            var regionSrgb = ColorSpace.ToPremulSrgb(regionSoa);
+            float err = ErrorMetric.MaxError(regionSrgb, up);
             sb.AppendLine($"  Error: {err}");
         }
 
@@ -125,12 +117,12 @@ public class DebugTests
         Assert.True(up.PixelCount == rw * rh, sb.ToString());
     }
 
-    private static float[] GetChannel(SoaImage img, int ch) => ch switch
+    private static float[] GetChannel(SoaImagePremul img, int ch) => ch switch
     {
         0 => img.R, 1 => img.G, 2 => img.B, 3 => img.A, _ => throw new System.ArgumentOutOfRangeException()
     };
 
-    private static void SetChannel(ref SoaImage img, int ch, float[] data)
+    private static void SetChannel(ref SoaImagePremul img, int ch, float[] data)
     {
         switch (ch) { case 0: img = img with { R = data }; break; case 1: img = img with { G = data }; break; case 2: img = img with { B = data }; break; case 3: img = img with { A = data }; break; }
     }
@@ -140,10 +132,11 @@ public class DebugTests
     {
         int w = 100, h = 100;
         byte[] imgU8 = CreateHGradientU8(w, h);
-        SoaImage imgLinear = ColorSpace.RgbaU8ToLinear(imgU8, w, h);
+        SoaImageLinear imgLinear = ColorSpace.DecodeSrgbRgba8ToLinear(imgU8, w, h);
+        SoaImagePremul imgPremul = ColorSpace.Premultiply(imgLinear);
 
-        var resX = Segmenter.SearchX(imgLinear, threshold: 4f);
-        var resY = Segmenter.SearchY(imgLinear, threshold: 4f);
+        var resX = Segmenter.SearchX(imgPremul, threshold: 4f);
+        var resY = Segmenter.SearchY(imgPremul, threshold: 4f);
 
         // Gradient images may return null from Segmenter; use identity fallback
         SearchResult1D finalX = resX ?? new SearchResult1D(0, w, w);
@@ -153,10 +146,10 @@ public class DebugTests
         sb.AppendLine($"Search X: {resX}");
         sb.AppendLine($"Search Y: {resY}");
 
-        var (compressed, meta) = Compressor.Compress2D(imgLinear, finalX, finalY);
+        var (compressed, meta) = Compressor.Compress2D(imgPremul, finalX, finalY);
         sb.AppendLine($"Compressed: {meta.CompressedW}x{meta.CompressedH}");
 
-        SoaImage recon = Compressor.ReconstructStretched(compressed, meta);
+        SoaImagePremul recon = Compressor.ReconstructStretched(compressed, meta);
 
         // Check a few pixel values
         for (int y = 0; y < h; y += 25)
@@ -164,11 +157,14 @@ public class DebugTests
         {
             int idx = y * w + x;
             float origSrgb = ColorSpace.LinearToSrgbByte(imgLinear.R[idx]);
-            float reconSrgb = ColorSpace.LinearToSrgbByte(recon.R[idx]);
+            // Reconstruct: unpremultiply first to get linear, then encode
+            float reconLinear = recon.R[idx] / MathF.Max(recon.A[idx], 1e-6f);
+            float reconSrgb = ColorSpace.LinearToSrgbByte(reconLinear);
             sb.AppendLine($"  ({x},{y}) orig={origSrgb:F1} recon={reconSrgb:F1} diff={MathF.Abs(origSrgb - reconSrgb):F1}");
         }
 
-        float err = ErrorMetric.MaxError(imgLinear, recon);
+        SoaImagePremulSrgb origSrgbFull = ColorSpace.ToPremulSrgb(imgPremul);
+        float err = ErrorMetric.MaxError(origSrgbFull, recon);
         sb.AppendLine($"MaxError = {err}");
 
         Console.WriteLine(sb.ToString());
@@ -179,39 +175,42 @@ public class DebugTests
     public void DebugManualNinePatch()
     {
         int w = 100, h = 100;
-        SoaImage img = SoaImage.Create(w, h);
+        SoaImageLinear imgLinear = SoaImageLinear.Create(w, h);
 
         int xb = 20, xe = 80, yb = 20, ye = 80;
 
         // Corners: solid colors
-        SetRect(img, 0, 0, xb, yb, 1.0f, 0.0f, 0.0f, 1.0f);
-        SetRect(img, xe, 0, w - xe, yb, 0.0f, 1.0f, 0.0f, 1.0f);
-        SetRect(img, 0, ye, xb, h - ye, 0.0f, 0.0f, 1.0f, 1.0f);
-        SetRect(img, xe, ye, w - xe, h - ye, 1.0f, 1.0f, 0.0f, 1.0f);
+        SetRect(imgLinear, 0, 0, xb, yb, 1.0f, 0.0f, 0.0f, 1.0f);
+        SetRect(imgLinear, xe, 0, w - xe, yb, 0.0f, 1.0f, 0.0f, 1.0f);
+        SetRect(imgLinear, 0, ye, xb, h - ye, 0.0f, 0.0f, 1.0f, 1.0f);
+        SetRect(imgLinear, xe, ye, w - xe, h - ye, 1.0f, 1.0f, 0.0f, 1.0f);
 
         // Top/bottom edges: horizontal gradient
-        SetHGradient(img, xb, 0, xe - xb, yb, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
-        SetHGradient(img, xb, ye, xe - xb, h - ye, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f);
+        SetHGradient(imgLinear, xb, 0, xe - xb, yb, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
+        SetHGradient(imgLinear, xb, ye, xe - xb, h - ye, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f);
 
         // Left/right edges: vertical gradient
-        SetVGradient(img, 0, yb, xb, ye - yb, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
-        SetVGradient(img, xe, yb, w - xe, ye - yb, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f);
+        SetVGradient(imgLinear, 0, yb, xb, ye - yb, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
+        SetVGradient(imgLinear, xe, yb, w - xe, ye - yb, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f);
 
         // Center: bilinear gradient
-        SetBilinear(img, xb, yb, xe - xb, ye - yb,
+        SetBilinear(imgLinear, xb, yb, xe - xb, ye - yb,
             1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f);
+
+        // Convert to premul for Compress2D
+        SoaImagePremul imgPremul = ColorSpace.Premultiply(imgLinear);
 
         var resX = new SearchResult1D(xb, xe, 60);
         var resY = new SearchResult1D(yb, ye, 60);
 
-        var (compressed, meta) = Compressor.Compress2D(img, resX, resY);
+        var (compressed, meta) = Compressor.Compress2D(imgPremul, resX, resY);
 
         var sb = new StringBuilder();
         sb.AppendLine($"Compressed: {meta.CompressedW}x{meta.CompressedH}");
         sb.AppendLine($"cwLeft={xb} cwMid={resX.N} cwRight={w - xe}");
         sb.AppendLine($"chTop={yb} chMid={resY.N} chBottom={h - ye}");
 
-        // Print compressed layout: top row, middle row, bottom row
+        // Print compressed layout
         sb.AppendLine($"Top row: rows 0..{yb - 1} in compressed");
         sb.AppendLine($"Middle row: rows {yb}..{yb + resY.N - 1} in compressed");
         sb.AppendLine($"Bottom row: rows {yb + resY.N}..{meta.CompressedH - 1} in compressed");
@@ -221,18 +220,20 @@ public class DebugTests
         int midRowStart = yb * meta.CompressedW;
         for (int x = 0; x < meta.CompressedW; x++)
         {
-            int idx = midRowStart + x; // row-major: row * width + col
+            int idx = midRowStart + x;
             sb.AppendLine($"  [{x}] R={compressed.R[idx]:F3} G={compressed.G[idx]:F3} B={compressed.B[idx]:F3}");
         }
 
         // Reconstruct
-        SoaImage recon = Compressor.ReconstructStretched(compressed, meta);
+        SoaImagePremul reconPremul = Compressor.ReconstructStretched(compressed, meta);
 
-        // Verify compressed bottom-right corner is yellow
+        // Verify compressed bottom-right corner
         int compressedBR = (meta.CompressedH - 1) * meta.CompressedW + (meta.CompressedW - 1);
         sb.AppendLine($"Compressed bottom-right pixel: R={compressed.R[compressedBR]:F3} G={compressed.G[compressedBR]:F3} B={compressed.B[compressedBR]:F3}");
 
-        // Check recon bottom-right
+        // Unpremultiply for comparison
+        SoaImageLinear recon = ColorSpace.Unpremultiply(reconPremul);
+
         sb.AppendLine($"Recon array size = {recon.PixelCount}, expected = {w * h}");
         int reconBR = 99 * w + 99;
         sb.AppendLine($"recon[99,99] raw: R={recon.R[reconBR]:F3} G={recon.G[reconBR]:F3} B={recon.B[reconBR]:F3}");
@@ -245,10 +246,11 @@ public class DebugTests
         foreach (var cx in checkX)
         {
             int idx = cy * w + cx;
-            sb.AppendLine($"  [{cx},{cy}] orig=({img.R[idx]:F2},{img.G[idx]:F2},{img.B[idx]:F2}) recon=({recon.R[idx]:F2},{recon.G[idx]:F2},{recon.B[idx]:F2})");
+            sb.AppendLine($"  [{cx},{cy}] orig=({imgLinear.R[idx]:F2},{imgLinear.G[idx]:F2},{imgLinear.B[idx]:F2}) recon=({recon.R[idx]:F2},{recon.G[idx]:F2},{recon.B[idx]:F2})");
         }
 
-        float err = ErrorMetric.MaxError(img, recon);
+        SoaImagePremulSrgb origSrgbFull = ColorSpace.ToPremulSrgb(imgPremul);
+        float err = ErrorMetric.MaxError(origSrgbFull, reconPremul);
         sb.AppendLine($"  MaxError = {err}");
 
         System.Diagnostics.Debug.WriteLine(sb.ToString());
@@ -256,7 +258,7 @@ public class DebugTests
         Assert.True(err <= 0.01f, sb.ToString());
     }
 
-    private static void SetRect(SoaImage img, int x, int y, int rw, int rh, float r, float g, float b, float a)
+    private static void SetRect(SoaImageLinear img, int x, int y, int rw, int rh, float r, float g, float b, float a)
     {
         for (int dy = 0; dy < rh; dy++)
         for (int dx = 0; dx < rw; dx++)
@@ -266,7 +268,7 @@ public class DebugTests
         }
     }
 
-    private static void SetHGradient(SoaImage img, int x, int y, int rw, int rh, float r1, float g1, float b1, float r2, float g2, float b2)
+    private static void SetHGradient(SoaImageLinear img, int x, int y, int rw, int rh, float r1, float g1, float b1, float r2, float g2, float b2)
     {
         for (int dy = 0; dy < rh; dy++)
         for (int dx = 0; dx < rw; dx++)
@@ -280,7 +282,7 @@ public class DebugTests
         }
     }
 
-    private static void SetVGradient(SoaImage img, int x, int y, int rw, int rh, float r1, float g1, float b1, float r2, float g2, float b2)
+    private static void SetVGradient(SoaImageLinear img, int x, int y, int rw, int rh, float r1, float g1, float b1, float r2, float g2, float b2)
     {
         for (int dy = 0; dy < rh; dy++)
         for (int dx = 0; dx < rw; dx++)
@@ -294,7 +296,7 @@ public class DebugTests
         }
     }
 
-    private static void SetBilinear(SoaImage img, int x, int y, int rw, int rh,
+    private static void SetBilinear(SoaImageLinear img, int x, int y, int rw, int rh,
         float r00, float g00, float b00, float r10, float g10, float b10, float r01, float g01, float b01, float r11, float g11, float b11)
     {
         for (int dy = 0; dy < rh; dy++)
@@ -311,6 +313,21 @@ public class DebugTests
     }
 
     private static float Lerp(float a, float b, float t) => a * (1 - t) + b * t;
+
+    private static SoaImagePremul CreateGradientPremul(int w, int h)
+    {
+        var linear = SoaImageLinear.Create(w, h);
+        for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+        {
+            int i = y * w + x;
+            linear.R[i] = x / (float)w;
+            linear.G[i] = y / (float)h;
+            linear.B[i] = 0.5f;
+            linear.A[i] = 1.0f;
+        }
+        return ColorSpace.Premultiply(linear);
+    }
 
     private static byte[] CreateImageU8(int w, int h, byte r, byte g, byte b, byte a)
     {

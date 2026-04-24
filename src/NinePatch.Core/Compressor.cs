@@ -1,12 +1,14 @@
+using System.Numerics;
+
 namespace NinePatch.Core;
 
 /// <summary>
 /// 2D nine-patch compression assembly and reconstruction.
-/// All operations work on SoaImage (4 separate channel planes).
+/// All operations work on SoaImagePremul (premultiplied linear) planes.
 /// </summary>
 public static class Compressor
 {
-    private static void CopyRect(SoaImage src, int srcW, SoaImage dst, int dstW,
+    private static void CopyRect(SoaImagePremul src, int srcW, SoaImagePremul dst, int dstW,
         int sx, int sy, int dx, int dy, int w, int h)
     {
         for (int ch = 0; ch < 4; ch++)
@@ -33,19 +35,19 @@ public static class Compressor
         return dst;
     }
 
-    private static float[] GetChannel(SoaImage img, int ch) => ch switch
+    private static float[] GetChannel(SoaImagePremul img, int ch) => ch switch
     {
         0 => img.R, 1 => img.G, 2 => img.B, 3 => img.A, _ => throw new System.ArgumentOutOfRangeException()
     };
 
-    private static void SetChannel(ref SoaImage img, int ch, float[] data)
+    private static void SetChannel(ref SoaImagePremul img, int ch, float[] data)
     {
         switch (ch) { case 0: img = img with { R = data }; break; case 1: img = img with { G = data }; break; case 2: img = img with { B = data }; break; case 3: img = img with { A = data }; break; }
     }
 
     /// <summary>Cut 9 regions, downsample stretch zones, assemble compressed texture.</summary>
-    public static (SoaImage compressed, NinePatchMeta meta) Compress2D(
-        SoaImage img, SearchResult1D resultX, SearchResult1D resultY)
+    public static (SoaImagePremul compressed, NinePatchMeta meta) Compress2D(
+        SoaImagePremul img, SearchResult1D resultX, SearchResult1D resultY)
     {
         int xb = resultX.Begin, xe = resultX.End, nx = resultX.N;
         int yb = resultY.Begin, ye = resultY.End, ny = resultY.N;
@@ -60,7 +62,7 @@ public static class Compressor
         int h2 = chTop + chMid + chBottom;
         int w2 = cwLeft + cwMid + cwRight;
 
-        var compressed = SoaImage.Create(w2, h2);
+        var compressed = SoaImagePremul.Create(w2, h2);
 
         // Top row (y=0..yb): copy left/right unchanged, X-downsample center
         if (chTop > 0)
@@ -145,8 +147,8 @@ public static class Compressor
     }
 
     /// <summary>Upsample stretch regions back to original size.</summary>
-    public static SoaImage ReconstructStretched(
-        SoaImage compressed, NinePatchMeta meta)
+    public static SoaImagePremul ReconstructStretched(
+        SoaImagePremul compressed, NinePatchMeta meta)
     {
         int xb = meta.Xb, xe = meta.Xe, yb = meta.Yb, ye = meta.Ye;
         int nx = meta.Nx, ny = meta.Ny;
@@ -161,7 +163,7 @@ public static class Compressor
         int chBottom = h - ye;
         int chMid = ny;
 
-        var result = SoaImage.Create(w, h);
+        var result = SoaImagePremul.Create(w, h);
 
         // Top strip: extract, expand X, write to result
         if (chTop > 0)
@@ -276,9 +278,9 @@ public static class Compressor
 
     /// <summary>
     /// Quick X-axis error check: extract [b,e) columns × full height, downsample X to 2,
-    /// upsample back, measure. Caller transposes the image for Y-axis checks.
+    /// upsample back, measure in premul-sRGB space.
     /// </summary>
-    private static float BoundaryErrorX(SoaImage img, int b, int e)
+    private static float BoundaryErrorX(SoaImagePremul img, int b, int e, SoaImagePremulSrgb origSrgb)
     {
         int len = e - b;
         int h = img.Height;
@@ -292,13 +294,13 @@ public static class Compressor
                 Buffer.BlockCopy(chData, (y * img.Width + b) * 4, region[ch], y * len * 4, len * 4);
         }
 
-        var regionSoa = new SoaImage(region[0], region[1], region[2], region[3])
+        var regionSoa = new SoaImagePremul(region[0], region[1], region[2], region[3])
         {
             Width = len,
             Height = h,
         };
 
-        var upSoa = SoaImage.Create(len, h);
+        var upSoa = SoaImagePremul.Create(len, h);
         for (int ch = 0; ch < 4; ch++)
         {
             var down = Resampler.Downsample1D(region[ch], len, h, 2, axis: 1);
@@ -306,7 +308,17 @@ public static class Compressor
             SetChannel(ref upSoa, ch, up);
         }
 
-        return ErrorMetric.MaxError(regionSoa, upSoa);
+        // Extract the same region from origSrgb for comparison
+        var origRegion = SoaImagePremulSrgb.Create(len, h);
+        for (int ch = 0; ch < 4; ch++)
+        {
+            var src = ch switch { 0 => origSrgb.R, 1 => origSrgb.G, 2 => origSrgb.B, 3 => origSrgb.A, _ => null! };
+            var dst = ch switch { 0 => origRegion.R, 1 => origRegion.G, 2 => origRegion.B, 3 => origRegion.A };
+            for (int y = 0; y < h; y++)
+                Buffer.BlockCopy(src, (y * origSrgb.Width + b) * 4, dst, y * len * 4, len * 4);
+        }
+
+        return ErrorMetric.MaxError(origRegion, upSoa);
     }
 
     /// <summary>Run full pipeline with margin auto-retry.</summary>
@@ -322,10 +334,15 @@ public static class Compressor
             return CompressResult.Fail(CompressStatus.InvalidInput,
                 $"Image {width}x{height} exceeds 1024x1024 limit");
 
-        SoaImage imgLinear = ColorSpace.RgbaU8ToLinear(imgU8, width, height);
+        // Decode → Linear → Premul → PremulSrgb
+        SoaImageLinear imgLinear = ColorSpace.DecodeSrgbRgba8ToLinear(imgU8, width, height);
+        SoaImagePremul imgPremul = ColorSpace.Premultiply(imgLinear);
+        SoaImagePremulSrgb origSrgb = ColorSpace.ToPremulSrgb(imgPremul);
 
-        SearchResult1D? resX = Segmenter.SearchX(imgLinear, (float)threshold, minLength, margin);
-        SearchResult1D? resY = Segmenter.SearchY(imgLinear, (float)threshold, minLength, margin);
+        SearchResult1D? resX = Segmenter.SearchX(imgPremul, (float)threshold, minLength, margin);
+        SearchResult1D? resY = Segmenter.SearchY(imgPremul, (float)threshold, minLength, margin);
+
+        System.Console.Error.WriteLine($"DEBUG: resX={resX}, resY={resY}");
 
         // Auto-retry with increasing margin
         int maxMargin = Math.Min(width, height) / 4;
@@ -337,9 +354,9 @@ public static class Compressor
             {
                 curMargin += marginStep;
                 if (resX is null)
-                    resX = Segmenter.SearchX(imgLinear, (float)threshold, minLength, curMargin);
+                    resX = Segmenter.SearchX(imgPremul, (float)threshold, minLength, curMargin);
                 if (resY is null)
-                    resY = Segmenter.SearchY(imgLinear, (float)threshold, minLength, curMargin);
+                    resY = Segmenter.SearchY(imgPremul, (float)threshold, minLength, curMargin);
                 if (resX is not null && resY is not null) break;
             }
         }
@@ -348,22 +365,28 @@ public static class Compressor
         SearchResult1D finalX = resX ?? new SearchResult1D(0, width, width);
         SearchResult1D finalY = resY ?? new SearchResult1D(0, height, height);
 
+        System.Console.Error.WriteLine($"DEBUG: finalX={finalX.Begin}-{finalX.End} N={finalX.N}, finalY={finalY.Begin}-{finalY.End} N={finalY.N}");
+
         // Compress
-        var (compressed, meta) = Compress2D(imgLinear, finalX, finalY);
+        var (compressed, meta) = Compress2D(imgPremul, finalX, finalY);
+
+        System.Console.WriteLine($"DEBUG: compressed={meta.CompressedW}x{meta.CompressedH}, savings={meta.SavingsPct:F1}%");
 
         // Boundary errors
         meta = meta with
         {
-            ErrorX = BoundaryErrorX(imgLinear, finalX.Begin, finalX.End),
-            ErrorY = BoundaryErrorX(imgLinear.Transpose(), finalY.Begin, finalY.End)
+            ErrorX = BoundaryErrorX(imgPremul, finalX.Begin, finalX.End, origSrgb),
+            ErrorY = BoundaryErrorX(imgPremul.Transpose(), finalY.Begin, finalY.End, origSrgb.Transpose())
         };
 
         // Reconstruct and measure 2D error
-        SoaImage reconstructed = ReconstructStretched(compressed, meta);
-        float err2d = ErrorMetric.MaxError(imgLinear, reconstructed);
+        SoaImagePremul reconstructedPremul = ReconstructStretched(compressed, meta);
+        float err2d = ErrorMetric.MaxError(origSrgb, reconstructedPremul);
         meta = meta with { Error2d = err2d };
 
-        byte[] compressedU8 = ColorSpace.RgbaLinearToU8(compressed);
+        // Output: Unpremultiply → Encode
+        SoaImageLinear compressedLinear = ColorSpace.Unpremultiply(compressed);
+        byte[] compressedU8 = ColorSpace.EncodeLinearToSrgbRgba8(compressedLinear);
         return CompressResult.Ok(compressedU8, meta);
     }
 }

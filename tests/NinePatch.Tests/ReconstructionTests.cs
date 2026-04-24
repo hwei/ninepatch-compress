@@ -9,19 +9,21 @@ public class ReconstructionTests
     public void Compress2D_Reconstruct_Roundtrip_UniformImage()
     {
         byte[] img = CreateImageU8(100, 100, 128, 128, 128, 255);
-        SoaImage imgLinear = ColorSpace.RgbaU8ToLinear(img, 100, 100);
+        SoaImageLinear imgLinear = ColorSpace.DecodeSrgbRgba8ToLinear(img, 100, 100);
+        SoaImagePremul imgPremul = ColorSpace.Premultiply(imgLinear);
 
-        var resX = Segmenter.SearchX(imgLinear, threshold: 4f);
-        var resY = Segmenter.SearchY(imgLinear, threshold: 4f);
+        var resX = Segmenter.SearchX(imgPremul, threshold: 4f);
+        var resY = Segmenter.SearchY(imgPremul, threshold: 4f);
         Assert.NotNull(resX);
         Assert.NotNull(resY);
 
-        var (compressed, meta) = Compressor.Compress2D(imgLinear, resX.Value, resY.Value);
+        var (compressed, meta) = Compressor.Compress2D(imgPremul, resX.Value, resY.Value);
 
-        SoaImage recon = Compressor.ReconstructStretched(compressed, meta);
-        Assert.Equal(imgLinear.PixelCount, recon.PixelCount);
+        SoaImagePremul recon = Compressor.ReconstructStretched(compressed, meta);
+        Assert.Equal(imgPremul.PixelCount, recon.PixelCount);
 
-        float err = ErrorMetric.MaxError(imgLinear, recon);
+        SoaImagePremulSrgb origSrgb = ColorSpace.ToPremulSrgb(imgPremul);
+        float err = ErrorMetric.MaxError(origSrgb, recon);
         Assert.True(err <= 4f, $"2D error = {err}");
     }
 
@@ -30,80 +32,82 @@ public class ReconstructionTests
     {
         int w = 100, h = 100;
         byte[] img = CreateHGradientU8(w, h);
-        SoaImage imgLinear = ColorSpace.RgbaU8ToLinear(img, w, h);
+        SoaImageLinear imgLinear = ColorSpace.DecodeSrgbRgba8ToLinear(img, w, h);
+        SoaImagePremul imgPremul = ColorSpace.Premultiply(imgLinear);
 
-        var resX = Segmenter.SearchX(imgLinear, threshold: 4f);
-        var resY = Segmenter.SearchY(imgLinear, threshold: 4f);
+        var resX = Segmenter.SearchX(imgPremul, threshold: 4f);
+        var resY = Segmenter.SearchY(imgPremul, threshold: 4f);
 
         // Gradient images may fall back to identity with Segmenter pipeline
         SearchResult1D finalX = resX ?? new SearchResult1D(0, w, w);
         SearchResult1D finalY = resY ?? new SearchResult1D(0, h, h);
 
-        var (compressed, meta) = Compressor.Compress2D(imgLinear, finalX, finalY);
-        SoaImage recon = Compressor.ReconstructStretched(compressed, meta);
+        var (compressed, meta) = Compressor.Compress2D(imgPremul, finalX, finalY);
+        SoaImagePremul recon = Compressor.ReconstructStretched(compressed, meta);
 
-        float err = ErrorMetric.MaxError(imgLinear, recon);
-        // Gradient images have high reconstruction error when compressed;
-        // the Segmenter pipeline may or may not find a valid segment
+        SoaImagePremulSrgb origSrgb = ColorSpace.ToPremulSrgb(imgPremul);
+        float err = ErrorMetric.MaxError(origSrgb, recon);
+        // Gradient images have high reconstruction error when compressed
         Assert.True(err <= 75f, $"2D error = {err} for gradient image");
     }
 
     [Fact]
     public void Compress2D_Reconstruct_Roundtrip_ManualNinePatch()
     {
-        // Build an image with a proper nine-patch structure:
-        // 20px solid corners, 60px gradient stretch region, 20px solid borders.
-        // Then manually specify the nine-patch split and verify roundtrip.
         int w = 100, h = 100;
-        SoaImage img = SoaImage.Create(w, h);
+        SoaImageLinear imgLinear = SoaImageLinear.Create(w, h);
 
         int xb = 20, xe = 80, yb = 20, ye = 80;
 
         // Corners: solid colors
-        SetRect(img, 0, 0, xb, yb, 1.0f, 0.0f, 0.0f, 1.0f);
-        SetRect(img, xe, 0, w - xe, yb, 0.0f, 1.0f, 0.0f, 1.0f);
-        SetRect(img, 0, ye, xb, h - ye, 0.0f, 0.0f, 1.0f, 1.0f);
-        SetRect(img, xe, ye, w - xe, h - ye, 1.0f, 1.0f, 0.0f, 1.0f);
+        SetRect(imgLinear, 0, 0, xb, yb, 1.0f, 0.0f, 0.0f, 1.0f);
+        SetRect(imgLinear, xe, 0, w - xe, yb, 0.0f, 1.0f, 0.0f, 1.0f);
+        SetRect(imgLinear, 0, ye, xb, h - ye, 0.0f, 0.0f, 1.0f, 1.0f);
+        SetRect(imgLinear, xe, ye, w - xe, h - ye, 1.0f, 1.0f, 0.0f, 1.0f);
 
         // Top/bottom edges: horizontal gradient
-        SetHGradient(img, xb, 0, xe - xb, yb, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
-        SetHGradient(img, xb, ye, xe - xb, h - ye, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f);
+        SetHGradient(imgLinear, xb, 0, xe - xb, yb, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
+        SetHGradient(imgLinear, xb, ye, xe - xb, h - ye, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f);
 
         // Left/right edges: vertical gradient
-        SetVGradient(img, 0, yb, xb, ye - yb, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
-        SetVGradient(img, xe, yb, w - xe, ye - yb, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f);
+        SetVGradient(imgLinear, 0, yb, xb, ye - yb, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
+        SetVGradient(imgLinear, xe, yb, w - xe, ye - yb, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f);
 
         // Center: bilinear gradient
-        SetBilinear(img, xb, yb, xe - xb, ye - yb,
+        SetBilinear(imgLinear, xb, yb, xe - xb, ye - yb,
             1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f);
+
+        SoaImagePremul imgPremul = ColorSpace.Premultiply(imgLinear);
 
         // Manually specify the nine-patch split (N=60 = lossless for 60px region)
         var resX = new SearchResult1D(xb, xe, 60);
         var resY = new SearchResult1D(yb, ye, 60);
 
-        var (compressed, meta) = Compressor.Compress2D(img, resX, resY);
-        SoaImage recon = Compressor.ReconstructStretched(compressed, meta);
+        var (compressed, meta) = Compressor.Compress2D(imgPremul, resX, resY);
+        SoaImagePremul recon = Compressor.ReconstructStretched(compressed, meta);
 
-        float err = ErrorMetric.MaxError(img, recon);
+        SoaImagePremulSrgb origSrgb = ColorSpace.ToPremulSrgb(imgPremul);
+        float err = ErrorMetric.MaxError(origSrgb, recon);
         Assert.True(err <= 0.01f, $"2D error = {err} for manual nine-patch");
     }
 
     [Fact]
     public void Compress2D_Reconstruct_Roundtrip_OneWayIdentityY()
     {
-        // Verify Compress2D/ReconstructStretched tolerate identity in one axis.
         int w = 80, h = 60;
         byte[] img = CreateHGradientU8(w, h);
-        SoaImage imgLinear = ColorSpace.RgbaU8ToLinear(img, w, h);
+        SoaImageLinear imgLinear = ColorSpace.DecodeSrgbRgba8ToLinear(img, w, h);
+        SoaImagePremul imgPremul = ColorSpace.Premultiply(imgLinear);
 
         // X compressed, Y identity
         var resX = new SearchResult1D(20, 60, 8);
         var resY = new SearchResult1D(0, h, h);
 
-        var (compressed, meta) = Compressor.Compress2D(imgLinear, resX, resY);
-        SoaImage recon = Compressor.ReconstructStretched(compressed, meta);
+        var (compressed, meta) = Compressor.Compress2D(imgPremul, resX, resY);
+        SoaImagePremul recon = Compressor.ReconstructStretched(compressed, meta);
 
-        float err = ErrorMetric.MaxError(imgLinear, recon);
+        SoaImagePremulSrgb origSrgb = ColorSpace.ToPremulSrgb(imgPremul);
+        float err = ErrorMetric.MaxError(origSrgb, recon);
         Assert.True(err <= 15f, $"2D error = {err} for one-way Y identity");
     }
 
@@ -154,7 +158,7 @@ public class ReconstructionTests
         return img;
     }
 
-    private static void SetRect(SoaImage img, int x, int y, int rw, int rh, float r, float g, float b, float a)
+    private static void SetRect(SoaImageLinear img, int x, int y, int rw, int rh, float r, float g, float b, float a)
     {
         for (int dy = 0; dy < rh; dy++)
         for (int dx = 0; dx < rw; dx++)
@@ -164,7 +168,7 @@ public class ReconstructionTests
         }
     }
 
-    private static void SetHGradient(SoaImage img, int x, int y, int rw, int rh, float r1, float g1, float b1, float r2, float g2, float b2)
+    private static void SetHGradient(SoaImageLinear img, int x, int y, int rw, int rh, float r1, float g1, float b1, float r2, float g2, float b2)
     {
         for (int dy = 0; dy < rh; dy++)
         for (int dx = 0; dx < rw; dx++)
@@ -178,7 +182,7 @@ public class ReconstructionTests
         }
     }
 
-    private static void SetVGradient(SoaImage img, int x, int y, int rw, int rh, float r1, float g1, float b1, float r2, float g2, float b2)
+    private static void SetVGradient(SoaImageLinear img, int x, int y, int rw, int rh, float r1, float g1, float b1, float r2, float g2, float b2)
     {
         for (int dy = 0; dy < rh; dy++)
         for (int dx = 0; dx < rw; dx++)
@@ -192,7 +196,7 @@ public class ReconstructionTests
         }
     }
 
-    private static void SetBilinear(SoaImage img, int x, int y, int rw, int rh,
+    private static void SetBilinear(SoaImageLinear img, int x, int y, int rw, int rh,
         float r00, float g00, float b00, float r10, float g10, float b10, float r01, float g01, float b01, float r11, float g11, float b11)
     {
         for (int dy = 0; dy < rh; dy++)

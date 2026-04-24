@@ -8,7 +8,7 @@ public class SearchTests
     [Fact]
     public void SearchX_UniformImage_ShouldFindSplit()
     {
-        SoaImage img = CreateImage(100, 100, 128, 128, 128, 255);
+        var img = CreatePremulImage(100, 100, 128, 128, 128, 255);
         var result = Segmenter.SearchX(img, threshold: 4f, margin: 0);
         Assert.NotNull(result);
         Assert.Equal(0, result.Value.Begin);
@@ -19,7 +19,7 @@ public class SearchTests
     [Fact]
     public void SearchY_UniformImage_ShouldFindSplit()
     {
-        SoaImage img = CreateImage(100, 100, 128, 128, 128, 255);
+        var img = CreatePremulImage(100, 100, 128, 128, 128, 255);
         var result = Segmenter.SearchY(img, threshold: 4f, margin: 0);
         Assert.NotNull(result);
         Assert.Equal(0, result.Value.Begin);
@@ -29,7 +29,7 @@ public class SearchTests
     [Fact]
     public void SearchX_NoiseImage_ShouldFailOrReturnSmallInterval()
     {
-        SoaImage img = CreateNoiseImage(20, 20);
+        var img = CreateNoisePremulImage(20, 20);
         var result = Segmenter.SearchX(img, threshold: 4f, margin: 0);
         if (result is not null)
         {
@@ -40,14 +40,14 @@ public class SearchTests
     [Fact]
     public void SearchX_WithMargin_ShouldRespectMargin()
     {
-        SoaImage img = CreateImage(100, 100, 128, 128, 128, 255);
+        var img = CreatePremulImage(100, 100, 128, 128, 128, 255);
         var result = Segmenter.SearchX(img, threshold: 4f, margin: 10);
         Assert.NotNull(result);
         Assert.True(result.Value.Begin >= 10);
         Assert.True(result.Value.End <= 90);
     }
 
-    private static SoaImage CreateImage(int w, int h, byte r, byte g, byte b, byte a)
+    private static SoaImagePremul CreatePremulImage(int w, int h, byte r, byte g, byte b, byte a)
     {
         var bytes = new byte[w * h * 4];
         for (int i = 0; i < w * h; i++)
@@ -57,10 +57,11 @@ public class SearchTests
             bytes[i * 4 + 2] = b;
             bytes[i * 4 + 3] = a;
         }
-        return ColorSpace.RgbaU8ToLinear(bytes, w, h);
+        var linear = ColorSpace.DecodeSrgbRgba8ToLinear(bytes, w, h);
+        return ColorSpace.Premultiply(linear);
     }
 
-    private static SoaImage CreateNoiseImage(int w, int h)
+    private static SoaImagePremul CreateNoisePremulImage(int w, int h)
     {
         var bytes = new byte[w * h * 4];
         for (int i = 0; i < w * h; i++)
@@ -71,6 +72,7 @@ public class SearchTests
             bytes[i * 4 + 2] = v;
             bytes[i * 4 + 3] = 255;
         }
-        return ColorSpace.RgbaU8ToLinear(bytes, w, h);
+        var linear = ColorSpace.DecodeSrgbRgba8ToLinear(bytes, w, h);
+        return ColorSpace.Premultiply(linear);
     }
 }

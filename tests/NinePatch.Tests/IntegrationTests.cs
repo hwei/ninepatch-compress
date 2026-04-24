@@ -16,8 +16,15 @@ public class IntegrationTests
         Assert.NotNull(result.CompressedRgba);
 
         var meta = result.Meta.Value;
-        Assert.True(meta.SavingsPct > 0);
-        Assert.True(meta.Error2d <= 4.0);
+        var dbg = $"compressed={meta.CompressedW}x{meta.CompressedH} orig={meta.OriginalW}x{meta.OriginalH} savings={meta.SavingsPct:F1}% err2d={meta.Error2d:F2}";
+        // Check first few compressed pixel values
+        var firstPixelR = result.CompressedRgba[0];
+        var firstPixelG = result.CompressedRgba[1];
+        var firstPixelB = result.CompressedRgba[2];
+        var firstPixelA = result.CompressedRgba[3];
+        dbg += $" firstPixel=({firstPixelR},{firstPixelG},{firstPixelB},{firstPixelA}) expected=(128,128,128,255)";
+        Assert.True(meta.SavingsPct > 0, $"No savings: {dbg}");
+        Assert.True(meta.Error2d <= 4.0, $"Error too high: {dbg}");
     }
 
     [Fact]

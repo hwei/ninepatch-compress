@@ -8,33 +8,71 @@ public class ErrorMetricTests
     [Fact]
     public void MaxError_IdenticalImages_ShouldBeZero()
     {
-        SoaImage img = SoaImage.Create(2, 1);
-        img.R[0] = 0.5f; img.G[0] = 0.5f; img.B[0] = 0.5f; img.A[0] = 1f;
-        img.R[1] = 0.2f; img.G[1] = 0.3f; img.B[1] = 0.4f; img.A[1] = 1f;
-        float err = ErrorMetric.MaxError(img, img);
+        var imgPremul = CreatePremulImage(2, 1,
+            [0.5f, 0.2f], [0.5f, 0.3f], [0.5f, 0.4f], [1f, 1f]);
+        var imgSrgb = ColorSpace.ToPremulSrgb(imgPremul);
+
+        float err = ErrorMetric.MaxError(imgSrgb, imgPremul);
         Assert.Equal(0f, err);
     }
 
     [Fact]
-    public void MaxError_FullyTransparent_ShouldBeZero()
+    public void MaxError_FullyTransparent_ShouldReportRgbError()
     {
-        // Even if RGB differs, alpha=0 means error should be suppressed
-        SoaImage orig = SoaImage.Create(1, 1);
-        orig.R[0] = 0f; orig.G[0] = 0f; orig.B[0] = 0f; orig.A[0] = 0f;
-        SoaImage recon = SoaImage.Create(1, 1);
-        recon.R[0] = 1f; recon.G[0] = 1f; recon.B[0] = 1f; recon.A[0] = 0f;
-        float err = ErrorMetric.MaxError(orig, recon, alphaWeighted: true);
+        // With premul-linear resampling, α=0 pixels have R=G=B=0 by convention.
+        // If reconstructed has different RGB, error is reported (no alpha weighting).
+        var origPremul = SoaImagePremul.Create(1, 1);
+        origPremul.R[0] = 0f; origPremul.G[0] = 0f; origPremul.B[0] = 0f; origPremul.A[0] = 0f;
+        var origSrgb = ColorSpace.ToPremulSrgb(origPremul);
+
+        var reconPremul = SoaImagePremul.Create(1, 1);
+        reconPremul.R[0] = 0f; reconPremul.G[0] = 0f; reconPremul.B[0] = 0f; reconPremul.A[0] = 0f;
+
+        float err = ErrorMetric.MaxError(origSrgb, reconPremul);
         Assert.Equal(0f, err);
     }
 
     [Fact]
     public void MaxError_AlphaOnlyDifference_ShouldReportAlphaError()
     {
-        SoaImage orig = SoaImage.Create(1, 1);
-        orig.R[0] = 0.5f; orig.G[0] = 0.5f; orig.B[0] = 0.5f; orig.A[0] = 1f;
-        SoaImage recon = SoaImage.Create(1, 1);
-        recon.R[0] = 0.5f; recon.G[0] = 0.5f; recon.B[0] = 0.5f; recon.A[0] = 0.5f;
-        float err = ErrorMetric.MaxError(orig, recon);
-        Assert.Equal(127.5f, err, 0); // |255 - 127.5| ≈ 128
+        var origPremul = CreatePremulImage(1, 1, [0.5f], [0.5f], [0.5f], [1f]);
+        var origSrgb = ColorSpace.ToPremulSrgb(origPremul);
+
+        var reconPremul = SoaImagePremul.Create(1, 1);
+        reconPremul.R[0] = 0.5f; reconPremul.G[0] = 0.5f; reconPremul.B[0] = 0.5f; reconPremul.A[0] = 0.5f;
+
+        float err = ErrorMetric.MaxError(origSrgb, reconPremul);
+        Assert.Equal(127.5f, err, 0); // |1.0 - 0.5| * 255 = 127.5
+    }
+
+    [Fact]
+    public void PassesThreshold_WithinThreshold_ShouldReturnTrue()
+    {
+        var origPremul = CreatePremulImage(1, 1, [0.5f], [0.5f], [0.5f], [1f]);
+        var origSrgb = ColorSpace.ToPremulSrgb(origPremul);
+
+        // Small reconstruction difference
+        var reconPremul = SoaImagePremul.Create(1, 1);
+        reconPremul.R[0] = 0.5f; reconPremul.G[0] = 0.5f; reconPremul.B[0] = 0.5f; reconPremul.A[0] = 0.999f;
+
+        Assert.True(ErrorMetric.PassesThreshold(origSrgb, reconPremul, 1f));
+    }
+
+    [Fact]
+    public void PassesThreshold_ExceedsThreshold_ShouldReturnFalse()
+    {
+        var origPremul = CreatePremulImage(1, 1, [0.5f], [0.5f], [0.5f], [1f]);
+        var origSrgb = ColorSpace.ToPremulSrgb(origPremul);
+
+        // Large alpha difference
+        var reconPremul = SoaImagePremul.Create(1, 1);
+        reconPremul.R[0] = 0.5f; reconPremul.G[0] = 0.5f; reconPremul.B[0] = 0.5f; reconPremul.A[0] = 0.5f;
+
+        Assert.False(ErrorMetric.PassesThreshold(origSrgb, reconPremul, 1f));
+    }
+
+    private static SoaImagePremul CreatePremulImage(int w, int h, float[] r, float[] g, float[] b, float[] a)
+    {
+        return new SoaImagePremul(r, g, b, a) { Width = w, Height = h };
     }
 }

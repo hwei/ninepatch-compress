@@ -24,7 +24,7 @@ public static class Segmenter
     /// </summary>
     public static List<(int begin, int end)> Segment(
         ReadOnlySpan<float> signal, int rate, float threshold, int minLength,
-        int marginL = 0, int marginR = -1)
+        int marginL = 0, int marginR = -1, bool isLinearChannel = false)
     {
         int L = signal.Length;
         if (marginR < 0) marginR = L;
@@ -36,8 +36,8 @@ public static class Segmenter
         var boxWeights = Resampler.BuildRowBoxWeights(L, dstLen);
         var bilinearArgs = Resampler.BuildRowBilinearParams(dstLen, L);
 
-        // Precompute original sRGB
-        var origSrgb = ComputeSrgbArray(signal);
+        // Precompute original in comparison space (sRGB for RGB, linear*255 for alpha)
+        var origArray = ComputeComparisonArray(signal, isLinearChannel);
 
         // Phase 1: whole-signal round-trip
         var down = new float[dstLen];
@@ -45,15 +45,15 @@ public static class Segmenter
         Resampler.Downsample1DRow(signal, L, boxWeights, down);
         Resampler.Upsample1DRow(down, dstLen, bilinearArgs, up);
 
-        // Compute per-pixel sRGB error
+        // Compute per-pixel error
         var errors = new float[L];
-        ComputeErrorArray(origSrgb, up, errors, L);
+        ComputeErrorArray(origArray, up, errors, L, isLinearChannel);
 
         // Find contiguous low-error regions
         var candidates = FindLowErrorRegions(errors, threshold, minLength, marginL, marginR);
 
         // Compute valid boundary set and shrink endpoints
-        var validBoundaries = ComputeValidBoundaries(signal, threshold, L, marginL, marginR);
+        var validBoundaries = ComputeValidBoundaries(signal, threshold, L, marginL, marginR, isLinearChannel);
         candidates = ShrinkToBoundaries(candidates, validBoundaries, minLength);
 
         if (candidates.Count == 0) return [];
@@ -62,47 +62,77 @@ public static class Segmenter
         var verified = new List<(int begin, int end)>();
         foreach (var (b, e) in candidates)
         {
-            if (VerifySegmentIndependent(signal.Slice(b, e - b), rate, threshold, origSrgb.AsSpan(b, e - b)))
+            if (VerifySegmentIndependent(signal.Slice(b, e - b), rate, threshold, origArray.AsSpan(b, e - b), isLinearChannel))
                 verified.Add((b, e));
         }
 
         return verified;
     }
 
-    /// <summary>Compute sRGB byte-scale values for a signal.</summary>
-    private static float[] ComputeSrgbArray(ReadOnlySpan<float> signal)
+    /// <summary>Compute comparison array: sRGB(linear)*255 for RGB, linear*255 for alpha.</summary>
+    private static float[] ComputeComparisonArray(ReadOnlySpan<float> signal, bool isLinearChannel)
     {
         int len = signal.Length;
-        var srgb = new float[len];
-        int vecLen = Vector<float>.Count;
-        int vecEnd = (len / vecLen) * vecLen;
-        var v255 = new Vector<float>(255f);
-        for (int i = 0; i < vecEnd; i += vecLen)
+        var arr = new float[len];
+        if (isLinearChannel)
         {
-            var s = ColorSpace.LinearToSrgbSimd(new Vector<float>(signal.Slice(i, vecLen))) * v255;
-            s.CopyTo(srgb.AsSpan(i));
+            var v255 = new Vector<float>(255f);
+            int vecLen = Vector<float>.Count;
+            int vecEnd = (len / vecLen) * vecLen;
+            for (int i = 0; i < vecEnd; i += vecLen)
+                (new Vector<float>(signal.Slice(i, vecLen)) * v255).CopyTo(arr.AsSpan(i));
+            for (int i = vecEnd; i < len; i++)
+                arr[i] = signal[i] * 255f;
         }
-        for (int i = vecEnd; i < len; i++)
-            srgb[i] = ColorSpace.LinearToSrgbFloat(signal[i]) * 255f;
-        return srgb;
+        else
+        {
+            int vecLen = Vector<float>.Count;
+            int vecEnd = (len / vecLen) * vecLen;
+            var v255 = new Vector<float>(255f);
+            for (int i = 0; i < vecEnd; i += vecLen)
+            {
+                var s = ColorSpace.LinearToSrgbSimd(new Vector<float>(signal.Slice(i, vecLen))) * v255;
+                s.CopyTo(arr.AsSpan(i));
+            }
+            for (int i = vecEnd; i < len; i++)
+                arr[i] = ColorSpace.LinearToSrgbFloat(signal[i]) * 255f;
+        }
+        return arr;
     }
 
-    /// <summary>Compute per-pixel sRGB error between original and reconstructed.</summary>
-    private static void ComputeErrorArray(float[] origSrgb, float[] reconstructed, float[] errors, int len)
+    /// <summary>Compute per-pixel error between original and reconstructed.</summary>
+    private static void ComputeErrorArray(float[] origArray, float[] reconstructed, float[] errors, int len, bool isLinearChannel)
     {
-        int vecLen = Vector<float>.Count;
-        int vecEnd = (len / vecLen) * vecLen;
-        var v255 = new Vector<float>(255f);
-        for (int i = 0; i < vecEnd; i += vecLen)
+        if (isLinearChannel)
         {
-            var reconSrgb = ColorSpace.LinearToSrgbSimd(new Vector<float>(reconstructed, i)) * v255;
-            var err = Vector.Abs(new Vector<float>(origSrgb, i) - reconSrgb);
-            err.CopyTo(errors.AsSpan(i));
+            int vecLen = Vector<float>.Count;
+            int vecEnd = (len / vecLen) * vecLen;
+            var v255 = new Vector<float>(255f);
+            for (int i = 0; i < vecEnd; i += vecLen)
+            {
+                var reconScaled = new Vector<float>(reconstructed, i) * v255;
+                var err = Vector.Abs(new Vector<float>(origArray, i) - reconScaled);
+                err.CopyTo(errors.AsSpan(i));
+            }
+            for (int i = vecEnd; i < len; i++)
+                errors[i] = MathF.Abs(origArray[i] - reconstructed[i] * 255f);
         }
-        for (int i = vecEnd; i < len; i++)
+        else
         {
-            float reconSrgb = ColorSpace.LinearToSrgbFloat(reconstructed[i]) * 255f;
-            errors[i] = MathF.Abs(origSrgb[i] - reconSrgb);
+            int vecLen = Vector<float>.Count;
+            int vecEnd = (len / vecLen) * vecLen;
+            var v255 = new Vector<float>(255f);
+            for (int i = 0; i < vecEnd; i += vecLen)
+            {
+                var reconSrgb = ColorSpace.LinearToSrgbSimd(new Vector<float>(reconstructed, i)) * v255;
+                var err = Vector.Abs(new Vector<float>(origArray, i) - reconSrgb);
+                err.CopyTo(errors.AsSpan(i));
+            }
+            for (int i = vecEnd; i < len; i++)
+            {
+                float reconSrgb = ColorSpace.LinearToSrgbFloat(reconstructed[i]) * 255f;
+                errors[i] = MathF.Abs(origArray[i] - reconSrgb);
+            }
         }
     }
 
@@ -130,16 +160,16 @@ public static class Segmenter
     }
 
     /// <summary>Compute valid boundary positions where adjacent-pixel diff <= threshold.</summary>
-    private static bool[] ComputeValidBoundaries(ReadOnlySpan<float> signal, float threshold, int len, int marginL, int marginR)
+    private static bool[] ComputeValidBoundaries(ReadOnlySpan<float> signal, float threshold, int len, int marginL, int marginR, bool isLinearChannel)
     {
         var valid = new bool[len + 1];
         valid[0] = true;
         valid[len] = true;
 
-        var srgb = ComputeSrgbArray(signal);
+        var compArray = ComputeComparisonArray(signal, isLinearChannel);
         for (int i = marginL + 1; i < marginR; i++)
         {
-            if (MathF.Abs(srgb[i] - srgb[i - 1]) <= threshold)
+            if (MathF.Abs(compArray[i] - compArray[i - 1]) <= threshold)
                 valid[i] = true;
         }
         if (marginL > 0) valid[marginL] = true;
@@ -165,7 +195,7 @@ public static class Segmenter
     }
 
     /// <summary>Verify a single segment independently at the given rate.</summary>
-    private static bool VerifySegmentIndependent(ReadOnlySpan<float> seg, int rate, float threshold, ReadOnlySpan<float> origSrgb)
+    private static bool VerifySegmentIndependent(ReadOnlySpan<float> seg, int rate, float threshold, ReadOnlySpan<float> origArray, bool isLinearChannel)
     {
         int segLen = seg.Length;
         int dstLen = Math.Max(1, segLen / rate);
@@ -177,21 +207,43 @@ public static class Segmenter
         Resampler.Downsample1DRow(seg, segLen, segWeights, down);
         Resampler.Upsample1DRow(down, dstLen, segBilinear, up);
 
-        int vecLen = Vector<float>.Count;
-        int vecEnd = (segLen / vecLen) * vecLen;
-        var v255 = new Vector<float>(255f);
-        for (int i = 0; i < vecEnd; i += vecLen)
+        if (isLinearChannel)
         {
-            var orig = new Vector<float>(origSrgb.Slice(i, vecLen));
-            var recon = ColorSpace.LinearToSrgbSimd(new Vector<float>(up, i)) * v255;
-            var err = Vector.Abs(orig - recon);
-            for (int j = 0; j < vecLen; j++)
-                if (err[j] > threshold) return false;
+            int vecLen = Vector<float>.Count;
+            int vecEnd = (segLen / vecLen) * vecLen;
+            var v255 = new Vector<float>(255f);
+            for (int i = 0; i < vecEnd; i += vecLen)
+            {
+                var orig = new Vector<float>(origArray.Slice(i, vecLen));
+                var recon = new Vector<float>(up, i) * v255;
+                var err = Vector.Abs(orig - recon);
+                for (int j = 0; j < vecLen; j++)
+                    if (err[j] > threshold) return false;
+            }
+            for (int i = vecEnd; i < segLen; i++)
+            {
+                if (MathF.Abs(origArray[i] - up[i] * 255f) > threshold)
+                    return false;
+            }
         }
-        for (int i = vecEnd; i < segLen; i++)
+        else
         {
-            if (MathF.Abs(origSrgb[i] - ColorSpace.LinearToSrgbFloat(up[i]) * 255f) > threshold)
-                return false;
+            int vecLen = Vector<float>.Count;
+            int vecEnd = (segLen / vecLen) * vecLen;
+            var v255 = new Vector<float>(255f);
+            for (int i = 0; i < vecEnd; i += vecLen)
+            {
+                var orig = new Vector<float>(origArray.Slice(i, vecLen));
+                var recon = ColorSpace.LinearToSrgbSimd(new Vector<float>(up, i)) * v255;
+                var err = Vector.Abs(orig - recon);
+                for (int j = 0; j < vecLen; j++)
+                    if (err[j] > threshold) return false;
+            }
+            for (int i = vecEnd; i < segLen; i++)
+            {
+                if (MathF.Abs(origArray[i] - ColorSpace.LinearToSrgbFloat(up[i]) * 255f) > threshold)
+                    return false;
+            }
         }
         return true;
     }
@@ -241,9 +293,10 @@ public static class Segmenter
     /// <summary>
     /// Find horizontal compressible segments: per-row Segment per channel →
     /// Intersect → intersect all rows' segment sets → minLength filter.
+    /// Signal source: SoaImagePremul (RGB = premul-linear, A = linear).
     /// </summary>
     public static List<(int begin, int end)> SqueezeHorizontal(
-        SoaImage img, int rate, float threshold, int minLength,
+        SoaImagePremul img, int rate, float threshold, int minLength,
         int marginL = 0, int marginR = -1)
     {
         if (marginR < 0) marginR = img.Width;
@@ -251,17 +304,18 @@ public static class Segmenter
         int height = img.Height;
 
         var channels = new[] { img.R, img.G, img.B, img.A };
+        bool[] isLinear = [false, false, false, true];
 
         if (height == 0) return [];
 
         // Intersect first row's channels as the initial result
-        var result = IntersectChannelsForRow(img, 0, rate, threshold, minLength, marginL, marginR, channels);
+        var result = IntersectChannelsForRow(img, 0, rate, threshold, minLength, marginL, marginR, channels, isLinear);
         if (result.Count == 0) return [];
 
         // Intersect with each subsequent row
         for (int y = 1; y < height; y++)
         {
-            var rowSegs = IntersectChannelsForRow(img, y, rate, threshold, minLength, marginL, marginR, channels);
+            var rowSegs = IntersectChannelsForRow(img, y, rate, threshold, minLength, marginL, marginR, channels, isLinear);
             result = IntersectTwoSets(result, rowSegs);
             if (result.Count == 0) return [];
         }
@@ -270,15 +324,15 @@ public static class Segmenter
     }
 
     private static List<(int, int)> IntersectChannelsForRow(
-        SoaImage img, int y, int rate, float threshold, int minLength,
-        int marginL, int marginR, float[][] channels)
+        SoaImagePremul img, int y, int rate, float threshold, int minLength,
+        int marginL, int marginR, float[][] channels, bool[] isLinear)
     {
         int width = img.Width;
         var chSegments = new List<List<(int begin, int end)>>(4);
-        foreach (var ch in channels)
+        for (int ch = 0; ch < 4; ch++)
         {
-            var row = ch.AsSpan(y * width, width);
-            var segs = Segment(row, rate, threshold, minLength, marginL, marginR);
+            var row = channels[ch].AsSpan(y * width, width);
+            var segs = Segment(row, rate, threshold, minLength, marginL, marginR, isLinear[ch]);
             chSegments.Add(segs);
         }
         return Intersect(chSegments, minLength);
@@ -291,7 +345,7 @@ public static class Segmenter
     /// Returns null if no segment passes at any rate (identity fallback).
     /// </summary>
     public static SearchResult1D? OptimizeHorizontal(
-        SoaImage img, float threshold, int minLength = 8,
+        SoaImagePremul img, float threshold, int minLength = 8,
         int margin = 0, int maxRate = 16)
     {
         int len = img.Width;
@@ -309,9 +363,9 @@ public static class Segmenter
         foreach (var (b, e) in segments)
         {
             int sLen = e - b;
-            var signals = ExtractHorizontalSignals(img, b, e);
-            var origSrgb = signals.Select(s => ComputeSrgbArray(s)).ToArray();
-            int maxPassingRate = SearchRateForSegment(signals, origSrgb, sLen, threshold, maxRate);
+            var (signals, isLinear) = ExtractHorizontalSignals(img, b, e);
+            var origArrays = signals.Select((s, ch) => ComputeComparisonArray(s, isLinear[ch])).ToArray();
+            int maxPassingRate = SearchRateForSegment(signals, origArrays, isLinear, sLen, threshold, maxRate);
             if (maxPassingRate < 2) continue;
 
             int targetLen = (int)MathF.Ceiling((float)sLen / maxPassingRate);
@@ -329,8 +383,9 @@ public static class Segmenter
     /// <summary>
     /// Extract 1D horizontal signals for all channels along segment [b, e).
     /// signals[ch][y * segLen + x] for x in [b,e), y in [0,height). Seg axis is contiguous.
+    /// Returns signals and per-channel isLinear flags.
     /// </summary>
-    private static float[][] ExtractHorizontalSignals(SoaImage img, int b, int e)
+    private static (float[][] signals, bool[] isLinear) ExtractHorizontalSignals(SoaImagePremul img, int b, int e)
     {
         int segLen = e - b;
         int orthoLen = img.Height;
@@ -345,7 +400,7 @@ public static class Segmenter
             for (int y = 0; y < orthoLen; y++)
                 Buffer.BlockCopy(src, (y * w + b) * 4, signals[ch], y * segLen * 4, segLen * 4);
         }
-        return signals;
+        return (signals, new bool[] { false, false, false, true });
     }
 
     /// <summary>
@@ -353,7 +408,7 @@ public static class Segmenter
     /// Coarse stepping (rate=2,3,4,...) then fine binary search.
     /// </summary>
     private static int SearchRateForSegment(
-        float[][] signals, float[][] origSrgb, int segLen, float threshold, int maxRate)
+        float[][] signals, float[][] origArrays, bool[] isLinear, int segLen, float threshold, int maxRate)
     {
         // Coarse search
         int lastPassing = 1;
@@ -361,7 +416,7 @@ public static class Segmenter
 
         for (int rate = 2; rate <= maxRate; rate++)
         {
-            if (VerifyRate1D(signals, origSrgb, rate, threshold, segLen))
+            if (VerifyRate1D(signals, origArrays, isLinear, rate, threshold, segLen))
                 lastPassing = rate;
             else
             {
@@ -377,7 +432,7 @@ public static class Segmenter
         while (hi - lo > 1)
         {
             int mid = (lo + hi) / 2;
-            if (VerifyRate1D(signals, origSrgb, mid, threshold, segLen))
+            if (VerifyRate1D(signals, origArrays, isLinear, mid, threshold, segLen))
                 lo = mid;
             else
                 hi = mid;
@@ -391,7 +446,7 @@ public static class Segmenter
     /// signals[ch] is laid out as [ortho][seg] row-major.
     /// </summary>
     private static bool VerifyRate1D(
-        float[][] signals, float[][] origSrgb, int rate, float threshold,
+        float[][] signals, float[][] origArrays, bool[] isLinear, int rate, float threshold,
         int segLen)
     {
         int orthoLen = signals[0].Length / segLen;
@@ -405,7 +460,8 @@ public static class Segmenter
         for (int ch = 0; ch < 4; ch++)
         {
             var signal = signals[ch];
-            var srgb = origSrgb[ch];
+            var origArray = origArrays[ch];
+            var isLin = isLinear[ch];
 
             for (int o = 0; o < orthoLen; o++)
             {
@@ -414,40 +470,60 @@ public static class Segmenter
                 Resampler.Upsample1DRow(down, dstLen, bilinearArgs, up);
 
                 // Check error per pixel
-                if (!CheckErrorVectorized(srgb.AsSpan(offset, segLen), up, threshold))
+                if (!CheckErrorVectorized(origArray.AsSpan(offset, segLen), up, threshold, isLin))
                     return false;
             }
         }
         return true;
     }
 
-    /// <summary>Check per-pixel sRGB error against threshold with SIMD + early exit.</summary>
-    private static bool CheckErrorVectorized(ReadOnlySpan<float> origSrgb, float[] reconstructed, float threshold)
+    /// <summary>Check per-pixel error against threshold with SIMD + early exit.</summary>
+    private static bool CheckErrorVectorized(ReadOnlySpan<float> origArray, float[] reconstructed, float threshold, bool isLinearChannel)
     {
-        int len = origSrgb.Length;
+        int len = origArray.Length;
         int vecLen = Vector<float>.Count;
         int vecEnd = (len / vecLen) * vecLen;
-        var v255 = new Vector<float>(255f);
 
-        for (int i = 0; i < vecEnd; i += vecLen)
+        if (isLinearChannel)
         {
-            var orig = new Vector<float>(origSrgb.Slice(i, vecLen));
-            var recon = ColorSpace.LinearToSrgbSimd(new Vector<float>(reconstructed, i)) * v255;
-            var err = Vector.Abs(orig - recon);
-            for (int j = 0; j < vecLen; j++)
-                if (err[j] > threshold) return false;
+            var v255 = new Vector<float>(255f);
+            for (int i = 0; i < vecEnd; i += vecLen)
+            {
+                var orig = new Vector<float>(origArray.Slice(i, vecLen));
+                var recon = new Vector<float>(reconstructed, i) * v255;
+                var err = Vector.Abs(orig - recon);
+                for (int j = 0; j < vecLen; j++)
+                    if (err[j] > threshold) return false;
+            }
+            for (int i = vecEnd; i < len; i++)
+            {
+                if (MathF.Abs(origArray[i] - reconstructed[i] * 255f) > threshold)
+                    return false;
+            }
         }
-        for (int i = vecEnd; i < len; i++)
+        else
         {
-            if (MathF.Abs(origSrgb[i] - ColorSpace.LinearToSrgbFloat(reconstructed[i]) * 255f) > threshold)
-                return false;
+            var v255 = new Vector<float>(255f);
+            for (int i = 0; i < vecEnd; i += vecLen)
+            {
+                var orig = new Vector<float>(origArray.Slice(i, vecLen));
+                var recon = ColorSpace.LinearToSrgbSimd(new Vector<float>(reconstructed, i)) * v255;
+                var err = Vector.Abs(orig - recon);
+                for (int j = 0; j < vecLen; j++)
+                    if (err[j] > threshold) return false;
+            }
+            for (int i = vecEnd; i < len; i++)
+            {
+                if (MathF.Abs(origArray[i] - ColorSpace.LinearToSrgbFloat(reconstructed[i]) * 255f) > threshold)
+                    return false;
+            }
         }
         return true;
     }
 
     // ---- Convenience wrappers ----
 
-    public static SearchResult1D? SearchX(SoaImage img, float threshold, int minLength = 8, int margin = 0)
+    public static SearchResult1D? SearchX(SoaImagePremul img, float threshold, int minLength = 8, int margin = 0)
     {
         return OptimizeHorizontal(img, threshold, minLength, margin);
     }
@@ -458,7 +534,7 @@ public static class Segmenter
     /// Returned Begin/End/N are in the original Y coordinate space (transposition is
     /// an involution on coordinate values along the searched axis).
     /// </summary>
-    public static SearchResult1D? SearchY(SoaImage img, float threshold, int minLength = 8, int margin = 0)
+    public static SearchResult1D? SearchY(SoaImagePremul img, float threshold, int minLength = 8, int margin = 0)
     {
         return OptimizeHorizontal(img.Transpose(), threshold, minLength, margin);
     }

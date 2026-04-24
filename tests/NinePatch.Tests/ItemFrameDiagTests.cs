@@ -20,10 +20,11 @@ public class ItemFrameDiagTests
         using var img = Image.Load<Rgba32>(Path.Combine(SamplesDir, "item_frame.png"));
         var rgba = new byte[img.Width * img.Height * 4];
         img.CopyPixelDataTo(rgba);
-        SoaImage lin = ColorSpace.RgbaU8ToLinear(rgba, img.Width, img.Height);
+        SoaImageLinear lin = ColorSpace.DecodeSrgbRgba8ToLinear(rgba, img.Width, img.Height);
+        SoaImagePremul premul = ColorSpace.Premultiply(lin);
 
-        var resX = Segmenter.SearchX(lin, threshold: 4f);
-        var resY = Segmenter.SearchY(lin, threshold: 4f);
+        var resX = Segmenter.SearchX(premul, threshold: 4f);
+        var resY = Segmenter.SearchY(premul, threshold: 4f);
 
         Assert.NotNull(resX);
         Assert.NotNull(resY);

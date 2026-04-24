@@ -145,7 +145,7 @@ public class SegmenterTests
     [Fact]
     public void SqueezeHorizontal_UniformImage_ShouldFindFullWidthSegment()
     {
-        var img = CreateUniformImage(100, 50, 128, 128, 128, 255);
+        var img = CreateUniformPremulImage(100, 50, 128, 128, 128, 255);
         var segments = Segmenter.SqueezeHorizontal(img, rate: 2, threshold: 4f, minLength: 8);
         Assert.Single(segments);
         Assert.Equal((0, 100), segments[0]);
@@ -155,19 +155,19 @@ public class SegmenterTests
     public void SqueezeHorizontal_RowWithDetail_ShouldReduceSegments()
     {
         // One row has a hard edge that breaks the segment
-        var img = CreateUniformImage(100, 10, 128, 128, 128, 255);
+        var img = CreateUniformPremulImage(100, 10, 128, 128, 128, 255);
         // Modify row 5 to have a hard edge
         for (int x = 40; x < 60; x++)
         {
             int idx = 5 * 100 + x;
-            img.R[idx] = ColorSpace.SrgbByteToLinear(0);
-            img.G[idx] = ColorSpace.SrgbByteToLinear(0);
-            img.B[idx] = ColorSpace.SrgbByteToLinear(0);
+            img.R[idx] = 0f;
+            img.G[idx] = 0f;
+            img.B[idx] = 0f;
         }
 
         var segmentsFull = Segmenter.SqueezeHorizontal(img, rate: 2, threshold: 4f, minLength: 20);
         // Compare with no-disruption image
-        var imgClean = CreateUniformImage(100, 10, 128, 128, 128, 255);
+        var imgClean = CreateUniformPremulImage(100, 10, 128, 128, 128, 255);
         var segmentsClean = Segmenter.SqueezeHorizontal(imgClean, rate: 2, threshold: 4f, minLength: 20);
         Console.WriteLine($"disrupted segments: {segmentsFull.Count}, clean: {segmentsClean.Count}");
         foreach (var s in segmentsFull) Console.WriteLine($"  disrupted: ({s.Item1},{s.Item2})");
@@ -182,7 +182,7 @@ public class SegmenterTests
     public void SqueezeHorizontal_AllRowsAgree_ShouldReturnSegment()
     {
         // Gradient that is consistent across all rows
-        var img = SoaImage.Create(100, 20);
+        var img = SoaImagePremul.Create(100, 20);
         for (int y = 0; y < 20; y++)
         for (int x = 0; x < 100; x++)
         {
@@ -203,7 +203,7 @@ public class SegmenterTests
     [Fact]
     public void Optimize_SingleSegment_ShouldReturnResult()
     {
-        var img = CreateUniformImage(100, 50, 128, 128, 128, 255);
+        var img = CreateUniformPremulImage(100, 50, 128, 128, 128, 255);
         var result = Segmenter.OptimizeHorizontal(img, threshold: 4f, minLength: 8);
         Assert.NotNull(result);
         Assert.Equal(0, result.Value.Begin);
@@ -225,7 +225,7 @@ public class SegmenterTests
             bytes[i * 4 + 2] = v;
             bytes[i * 4 + 3] = 255;
         }
-        var img = ColorSpace.RgbaU8ToLinear(bytes, 20, 20);
+        var img = ColorSpace.Premultiply(ColorSpace.DecodeSrgbRgba8ToLinear(bytes, 20, 20));
         var result = Segmenter.OptimizeHorizontal(img, threshold: 4f, minLength: 8);
         Assert.Null(result);
     }
@@ -233,7 +233,7 @@ public class SegmenterTests
     [Fact]
     public void Optimize_RateSearchConvergence_ShouldFindHighRateForUniform()
     {
-        var img = CreateUniformImage(64, 32, 128, 128, 128, 255);
+        var img = CreateUniformPremulImage(64, 32, 128, 128, 128, 255);
         var result = Segmenter.OptimizeHorizontal(img, threshold: 4f, minLength: 8);
         Assert.NotNull(result);
         // Uniform 64-wide image supports rate=16 (maxRate), so target length = ceil(64/16) = 4.
@@ -266,7 +266,7 @@ public class SegmenterTests
     [Fact]
     public void SearchX_MarginAndMinLengthBoundary_ShouldReturnNull()
     {
-        var img = CreateUniformImage(20, 20, 128, 128, 128, 255);
+        var img = CreateUniformPremulImage(20, 20, 128, 128, 128, 255);
         // margin * 2 + minLength > dimension should return null
         var result = Segmenter.SearchX(img, threshold: 4f, minLength: 15, margin: 5);
         Assert.Null(result);
@@ -274,7 +274,7 @@ public class SegmenterTests
 
     // ---- Helper ----
 
-    private static SoaImage CreateUniformImage(int w, int h, byte r, byte g, byte b, byte a)
+    private static SoaImagePremul CreateUniformPremulImage(int w, int h, byte r, byte g, byte b, byte a)
     {
         var bytes = new byte[w * h * 4];
         for (int i = 0; i < w * h; i++)
@@ -284,6 +284,6 @@ public class SegmenterTests
             bytes[i * 4 + 2] = b;
             bytes[i * 4 + 3] = a;
         }
-        return ColorSpace.RgbaU8ToLinear(bytes, w, h);
+        return ColorSpace.Premultiply(ColorSpace.DecodeSrgbRgba8ToLinear(bytes, w, h));
     }
 }

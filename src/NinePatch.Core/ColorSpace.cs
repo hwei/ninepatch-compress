@@ -3,7 +3,7 @@ using System.Numerics;
 namespace NinePatch.Core;
 
 /// <summary>Structure of Arrays: 4 independent H×W channel planes.</summary>
-public readonly record struct SoaImage(
+public readonly record struct SoaImageLinear(
     float[] R,
     float[] G,
     float[] B,
@@ -13,10 +13,10 @@ public readonly record struct SoaImage(
     public int Height { get; init; }
     public int PixelCount => Width * Height;
 
-    public static SoaImage Create(int width, int height)
+    public static SoaImageLinear Create(int width, int height)
     {
         int n = width * height;
-        return new SoaImage(new float[n], new float[n], new float[n], new float[n])
+        return new SoaImageLinear(new float[n], new float[n], new float[n], new float[n])
         {
             Width = width,
             Height = height,
@@ -26,8 +26,8 @@ public readonly record struct SoaImage(
     /// <summary>Index into any channel array: y * Width + x.</summary>
     public int Index(int x, int y) => y * Width + x;
 
-    /// <summary>Return a new SoaImage with rows and columns swapped (Width↔Height).</summary>
-    public SoaImage Transpose()
+    /// <summary>Return a new SoaImageLinear with rows and columns swapped (Width↔Height).</summary>
+    public SoaImageLinear Transpose()
     {
         int w = Width, h = Height;
         var rT = new float[w * h];
@@ -47,7 +47,101 @@ public readonly record struct SoaImage(
                 aT[dst] = A[src];
             }
         }
-        return new SoaImage(rT, gT, bT, aT) { Width = h, Height = w };
+        return new SoaImageLinear(rT, gT, bT, aT) { Width = h, Height = w };
+    }
+}
+
+/// <summary>Structure of Arrays: premultiplied linear (R·α, G·α, B·α, α).</summary>
+public readonly record struct SoaImagePremul(
+    float[] R,
+    float[] G,
+    float[] B,
+    float[] A)
+{
+    public int Width { get; init; }
+    public int Height { get; init; }
+    public int PixelCount => Width * Height;
+
+    public static SoaImagePremul Create(int width, int height)
+    {
+        int n = width * height;
+        return new SoaImagePremul(new float[n], new float[n], new float[n], new float[n])
+        {
+            Width = width,
+            Height = height,
+        };
+    }
+
+    public int Index(int x, int y) => y * Width + x;
+
+    public SoaImagePremul Transpose()
+    {
+        int w = Width, h = Height;
+        var rT = new float[w * h];
+        var gT = new float[w * h];
+        var bT = new float[w * h];
+        var aT = new float[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            int rowBase = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                int src = rowBase + x;
+                int dst = x * h + y;
+                rT[dst] = R[src];
+                gT[dst] = G[src];
+                bT[dst] = B[src];
+                aT[dst] = A[src];
+            }
+        }
+        return new SoaImagePremul(rT, gT, bT, aT) { Width = h, Height = w };
+    }
+}
+
+/// <summary>Structure of Arrays: sRGB-encoded premultiplied (sRGB(R·α), sRGB(G·α), sRGB(B·α), linear α).</summary>
+public readonly record struct SoaImagePremulSrgb(
+    float[] R,
+    float[] G,
+    float[] B,
+    float[] A)
+{
+    public int Width { get; init; }
+    public int Height { get; init; }
+    public int PixelCount => Width * Height;
+
+    public static SoaImagePremulSrgb Create(int width, int height)
+    {
+        int n = width * height;
+        return new SoaImagePremulSrgb(new float[n], new float[n], new float[n], new float[n])
+        {
+            Width = width,
+            Height = height,
+        };
+    }
+
+    public int Index(int x, int y) => y * Width + x;
+
+    public SoaImagePremulSrgb Transpose()
+    {
+        int w = Width, h = Height;
+        var rT = new float[w * h];
+        var gT = new float[w * h];
+        var bT = new float[w * h];
+        var aT = new float[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            int rowBase = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                int src = rowBase + x;
+                int dst = x * h + y;
+                rT[dst] = R[src];
+                gT[dst] = G[src];
+                bT[dst] = B[src];
+                aT[dst] = A[src];
+            }
+        }
+        return new SoaImagePremulSrgb(rT, gT, bT, aT) { Width = h, Height = w };
     }
 }
 
@@ -86,8 +180,8 @@ public static class ColorSpace
         return LinearToSrgbLut[Math.Clamp(idx, 0, 4095)];
     }
 
-    /// <summary>RGBA uint8 (H×W×4, sRGB) → SoaImage (linear float planes)</summary>
-    public static SoaImage RgbaU8ToLinear(ReadOnlySpan<byte> src, int width, int height)
+    /// <summary>RGBA uint8 (H×W×4, sRGB) → SoaImageLinear (linear float planes)</summary>
+    public static SoaImageLinear DecodeSrgbRgba8ToLinear(ReadOnlySpan<byte> src, int width, int height)
     {
         int nPixels = src.Length / 4;
         if (nPixels != width * height)
@@ -106,11 +200,11 @@ public static class ColorSpace
             a[i] = src[i * 4 + 3] / 255.0f;
         }
 
-        return new SoaImage(r, g, b, a) { Width = width, Height = height };
+        return new SoaImageLinear(r, g, b, a) { Width = width, Height = height };
     }
 
-    /// <summary>SoaImage (linear float planes) → RGBA uint8 (H×W×4, sRGB)</summary>
-    public static byte[] RgbaLinearToU8(SoaImage img)
+    /// <summary>SoaImageLinear (linear float planes) → RGBA uint8 (H×W×4, sRGB)</summary>
+    public static byte[] EncodeLinearToSrgbRgba8(SoaImageLinear img)
     {
         int n = img.PixelCount;
         var dst = new byte[n * 4];
@@ -179,5 +273,91 @@ public static class ColorSpace
     {
         float s = c <= 0.0031308f ? c * 12.92f : 1.055f * MathF.Pow(c, 1.0f / 2.4f) - 0.055f;
         return (byte)Math.Clamp((int)(s * 255.0f + 0.5f), 0, 255);
+    }
+
+    /// <summary>SoaImageLinear → SoaImagePremul: R'=R·α, G'=G·α, B'=B·α, A'=α</summary>
+    internal static SoaImagePremul Premultiply(SoaImageLinear img)
+    {
+        int n = img.PixelCount;
+        var r = new float[n];
+        var g = new float[n];
+        var b = new float[n];
+        var a = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            float alpha = img.A[i];
+            r[i] = img.R[i] * alpha;
+            g[i] = img.G[i] * alpha;
+            b[i] = img.B[i] * alpha;
+            a[i] = alpha;
+        }
+        return new SoaImagePremul(r, g, b, a) { Width = img.Width, Height = img.Height };
+    }
+
+    /// <summary>SoaImagePremul → SoaImageLinear: R=R'/α, G=G'/α, B=B'/α, A=α. α=0 → RGB=0.</summary>
+    internal static SoaImageLinear Unpremultiply(SoaImagePremul img)
+    {
+        int n = img.PixelCount;
+        var r = new float[n];
+        var g = new float[n];
+        var b = new float[n];
+        var a = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            float alpha = img.A[i];
+            if (alpha == 0f)
+            {
+                r[i] = 0f; g[i] = 0f; b[i] = 0f;
+            }
+            else
+            {
+                float inv = 1f / alpha;
+                r[i] = img.R[i] * inv;
+                g[i] = img.G[i] * inv;
+                b[i] = img.B[i] * inv;
+            }
+            a[i] = alpha;
+        }
+        return new SoaImageLinear(r, g, b, a) { Width = img.Width, Height = img.Height };
+    }
+
+    /// <summary>SoaImagePremul → SoaImagePremulSrgb: RGB through LinearToSrgbSimd, A copied.</summary>
+    internal static SoaImagePremulSrgb ToPremulSrgb(SoaImagePremul img)
+    {
+        int n = img.PixelCount;
+        int vecLen = Vector<float>.Count;
+        int vecEnd = (n / vecLen) * vecLen;
+
+        var r = new float[n];
+        var g = new float[n];
+        var b = new float[n];
+        var a = new float[n];
+
+        var v255 = new Vector<float>(255f);
+
+        // SIMD: LinearToSrgbSimd on R/G/B, copy A
+        for (int i = 0; i < vecEnd; i += vecLen)
+        {
+            var rCh = new Vector<float>(img.R, i);
+            var gCh = new Vector<float>(img.G, i);
+            var bCh = new Vector<float>(img.B, i);
+            var aCh = new Vector<float>(img.A, i);
+
+            (LinearToSrgbSimd(rCh) * v255).CopyTo(r.AsSpan(i));
+            (LinearToSrgbSimd(gCh) * v255).CopyTo(g.AsSpan(i));
+            (LinearToSrgbSimd(bCh) * v255).CopyTo(b.AsSpan(i));
+            aCh.CopyTo(a.AsSpan(i));
+        }
+
+        // Scalar tail
+        for (int i = vecEnd; i < n; i++)
+        {
+            r[i] = LinearToSrgbFloat(img.R[i]) * 255f;
+            g[i] = LinearToSrgbFloat(img.G[i]) * 255f;
+            b[i] = LinearToSrgbFloat(img.B[i]) * 255f;
+            a[i] = img.A[i];
+        }
+
+        return new SoaImagePremulSrgb(r, g, b, a) { Width = img.Width, Height = img.Height };
     }
 }

@@ -20,7 +20,7 @@ const float threshold = 4f;
 foreach (var (name, rgba, w, h) in images)
 {
     Console.WriteLine($"=== {name} ({w}x{h}) ===");
-    var img = ColorSpace.RgbaU8ToLinear(rgba, w, h);
+    var img = ColorSpace.DecodeSrgbRgba8ToLinear(rgba, w, h);
 
     var sw = Stopwatch.StartNew();
     var resultX = Search1D.SearchX(img, threshold, margin: 0);
@@ -38,14 +38,14 @@ foreach (var (name, rgba, w, h) in images)
 Console.WriteLine("=== Detailed breakdown (hgrad 100x100, X axis) ===");
 {
     var (name, rgba, w, h) = images[0];
-    var img = ColorSpace.RgbaU8ToLinear(rgba, w, h);
+    var img = ColorSpace.DecodeSrgbRgba8ToLinear(rgba, w, h);
     int len = img.Width, margin = 0;
     int maxN = len / 2;
     int b = 0, e = len;
 
     // Time the full MeasureError pipeline (Compress1D + ErrorMetric)
     // by running Search1D with a known result and timing individual components
-    var recon = SoaImage.Create(w, h);
+    var recon = SoaImageLinear.Create(w, h);
 
     // Measure a single Compress1D+Error cycle
     var sw = Stopwatch.StartNew();
@@ -133,16 +133,16 @@ Console.WriteLine("=== Detailed breakdown (hgrad 100x100, X axis) ===");
     Console.WriteLine($"  Time in binary search:    {bsTime / 1000.0:F0}ms");
 }
 
-static (float error, bool passes) BenchTryN(SoaImage img, int b, int e, int n, float threshold, int axis)
+static (float error, bool passes) BenchTryN(SoaImageLinear img, int b, int e, int n, float threshold, int axis)
 {
-    var recon = SoaImage.Create(img.Width, img.Height);
+    var recon = SoaImageLinear.Create(img.Width, img.Height);
     BenchMeasureError(img, b, e, n, axis, recon);
     float err = ErrorMetric.MaxError(img, recon);
     return (err, err <= threshold);
 }
 
 /// <summary>Mirrors Search1D.MeasureError so we can benchmark components.</summary>
-static void BenchMeasureError(SoaImage img, int b, int e, int n, int axis, SoaImage recon)
+static void BenchMeasureError(SoaImageLinear img, int b, int e, int n, int axis, SoaImageLinear recon)
 {
     int len = e - b;
     int w = img.Width;
