@@ -17,10 +17,10 @@ public class ErrorMetricTests
     }
 
     [Fact]
-    public void MaxError_FullyTransparent_ShouldReportRgbError()
+    public void MaxError_IdenticalFullyTransparent_ShouldBeZero()
     {
-        // With premul-linear resampling, α=0 pixels have R=G=B=0 by convention.
-        // If reconstructed has different RGB, error is reported (no alpha weighting).
+        // Both original and reconstructed are fully transparent (α=0, RGB=0),
+        // so error should be exactly zero.
         var origPremul = SoaImagePremul.Create(1, 1);
         origPremul.R[0] = 0f; origPremul.G[0] = 0f; origPremul.B[0] = 0f; origPremul.A[0] = 0f;
         var origSrgb = ColorSpace.ToPremulSrgb(origPremul);
@@ -30,6 +30,23 @@ public class ErrorMetricTests
 
         float err = ErrorMetric.MaxError(origSrgb, reconPremul);
         Assert.Equal(0f, err);
+    }
+
+    [Fact]
+    public void MaxError_TransparentOriginal_NonzeroReconRgb_ShouldReportError()
+    {
+        // α=0 original (RGB=0 by convention) vs non-zero premul RGB in reconstructed.
+        // The 4-channel kernel should report this RGB error (no alpha suppression).
+        var origPremul = SoaImagePremul.Create(1, 1);
+        origPremul.R[0] = 0f; origPremul.G[0] = 0f; origPremul.B[0] = 0f; origPremul.A[0] = 0f;
+        var origSrgb = ColorSpace.ToPremulSrgb(origPremul);
+
+        var reconPremul = SoaImagePremul.Create(1, 1);
+        reconPremul.R[0] = 0.1f; reconPremul.G[0] = 0.05f; reconPremul.B[0] = 0f; reconPremul.A[0] = 0f;
+
+        float err = ErrorMetric.MaxError(origSrgb, reconPremul);
+        // sRGB(0.1) ≈ 0.37 → ×255 ≈ 94, but polynomial approx gives slightly less
+        Assert.True(err > 50f, $"Expected RGB error > 50, got {err}");
     }
 
     [Fact]

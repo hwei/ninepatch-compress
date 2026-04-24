@@ -342,8 +342,6 @@ public static class Compressor
         SearchResult1D? resX = Segmenter.SearchX(imgPremul, (float)threshold, minLength, margin);
         SearchResult1D? resY = Segmenter.SearchY(imgPremul, (float)threshold, minLength, margin);
 
-        System.Console.Error.WriteLine($"DEBUG: resX={resX}, resY={resY}");
-
         // Auto-retry with increasing margin
         int maxMargin = Math.Min(width, height) / 4;
         int curMargin = margin;
@@ -365,12 +363,8 @@ public static class Compressor
         SearchResult1D finalX = resX ?? new SearchResult1D(0, width, width);
         SearchResult1D finalY = resY ?? new SearchResult1D(0, height, height);
 
-        System.Console.Error.WriteLine($"DEBUG: finalX={finalX.Begin}-{finalX.End} N={finalX.N}, finalY={finalY.Begin}-{finalY.End} N={finalY.N}");
-
         // Compress
         var (compressed, meta) = Compress2D(imgPremul, finalX, finalY);
-
-        System.Console.WriteLine($"DEBUG: compressed={meta.CompressedW}x{meta.CompressedH}, savings={meta.SavingsPct:F1}%");
 
         // Boundary errors
         meta = meta with

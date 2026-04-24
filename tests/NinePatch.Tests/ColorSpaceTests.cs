@@ -134,4 +134,39 @@ public class ColorSpaceTests
         Assert.Equal(expectedB, srgb.B[0], 3);
         Assert.Equal(0.75f, srgb.A[0]);
     }
+
+    [Fact]
+    public void PremulInvariant_PremultiplyEnsuresRgbLeqAlpha()
+    {
+        // After premultiplication, R·α ≤ α, G·α ≤ α, B·α ≤ α must hold.
+        // This invariant is preserved by linear resampling (convex combination).
+        var bytes = new byte[4 * 4 * 4];
+        var rng = new System.Random(42);
+        for (int i = 0; i < bytes.Length; i++) bytes[i] = (byte)rng.Next(256);
+
+        var linear = ColorSpace.DecodeSrgbRgba8ToLinear(bytes, 4, 4);
+        var premul = ColorSpace.Premultiply(linear);
+
+        for (int i = 0; i < premul.PixelCount; i++)
+        {
+            float alpha = premul.A[i];
+            Assert.True(premul.R[i] <= alpha + 1e-6f, $"R[{i}]={premul.R[i]} > α={alpha}");
+            Assert.True(premul.G[i] <= alpha + 1e-6f, $"G[{i}]={premul.G[i]} > α={alpha}");
+            Assert.True(premul.B[i] <= alpha + 1e-6f, $"B[{i}]={premul.B[i]} > α={alpha}");
+        }
+    }
+
+    [Fact]
+    public void Unpremultiply_NearZeroAlpha_DoesNotExplode()
+    {
+        // Very small α should not cause RGB explosion after unpremultiply
+        var img = SoaImagePremul.Create(1, 1);
+        img.R[0] = 1e-10f; img.G[0] = 1e-10f; img.B[0] = 1e-10f; img.A[0] = 1e-10f;
+
+        var unpremul = ColorSpace.Unpremultiply(img);
+        // R/α should be ≤ 1.0 since premul invariant holds
+        Assert.True(unpremul.R[0] <= 1.0f + 1e-6f);
+        Assert.True(unpremul.G[0] <= 1.0f + 1e-6f);
+        Assert.True(unpremul.B[0] <= 1.0f + 1e-6f);
+    }
 }
