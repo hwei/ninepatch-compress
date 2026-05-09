@@ -63,15 +63,20 @@ export function ComparePane({
       className={`relative ${bgClass} no-select`}
       style={{ width: W, height: H }}
     >
-      {/* Original — always full width */}
+      {/* Original — clipped to left of divider */}
       {originalUrl && (
-        <img
-          src={originalUrl}
-          alt="original"
-          className="absolute inset-0 pixelated"
-          style={{ width: W, height: H, pointerEvents: 'none' }}
-          draggable={false}
-        />
+        <div
+          className="absolute top-0 left-0 overflow-hidden"
+          style={{ width: dividerX, height: H }}
+        >
+          <img
+            src={originalUrl}
+            alt="original"
+            className="absolute top-0 left-0 pixelated"
+            style={{ width: W, height: H, pointerEvents: 'none' }}
+            draggable={false}
+          />
+        </div>
       )}
 
       {/* Reconstructed — clipped to right of divider */}
