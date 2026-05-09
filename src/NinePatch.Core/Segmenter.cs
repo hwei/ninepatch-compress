@@ -521,6 +521,42 @@ public static class Segmenter
         return true;
     }
 
+    // ---- Debug: per-line candidate collection ----
+
+    /// <summary>
+    /// Return per-row X candidate intervals after channel intersection.
+    /// One DebugLineCandidates per source row; rows with no candidates yield empty intervals.
+    /// </summary>
+    public static List<DebugLineCandidates> CollectRowCandidatesX(
+        SoaImagePremul img, int rate, float threshold, int minLength,
+        int marginL = 0, int marginR = -1)
+    {
+        if (marginR < 0) marginR = img.Width;
+        var channels = new[] { img.R, img.G, img.B, img.A };
+        bool[] isLinear = [false, false, false, true];
+
+        var result = new List<DebugLineCandidates>(img.Height);
+        for (int y = 0; y < img.Height; y++)
+        {
+            var segs = IntersectChannelsForRow(img, y, rate, threshold, minLength, marginL, marginR, channels, isLinear);
+            result.Add(new DebugLineCandidates(y, segs));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Return per-column Y candidate intervals after channel intersection.
+    /// Works by transposing the image and reusing the X candidate collector.
+    /// </summary>
+    public static List<DebugLineCandidates> CollectColumnCandidatesY(
+        SoaImagePremul img, int rate, float threshold, int minLength,
+        int marginL = 0, int marginR = -1)
+    {
+        var transposed = img.Transpose();
+        if (marginR < 0) marginR = img.Height;
+        return CollectRowCandidatesX(transposed, rate, threshold, minLength, marginL, marginR);
+    }
+
     // ---- Convenience wrappers ----
 
     public static SearchResult1D? SearchX(SoaImagePremul img, float threshold, int minLength = 8, int margin = 0)

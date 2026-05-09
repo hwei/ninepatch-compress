@@ -342,6 +342,90 @@ public class DebugTests
         return img;
     }
 
+    [Fact]
+    public void Analyze_ValidImage_ReturnsRowAndColumnCandidates()
+    {
+        byte[] img = CreateImageU8(100, 100, 128, 128, 128, 255);
+        var result = NinePatchCompressor.Analyze(img, 100, 100);
+
+        Assert.Equal(CompressStatus.Success, result.Status);
+        Assert.NotNull(result.XCandidates);
+        Assert.NotNull(result.YCandidates);
+        Assert.True(result.XCandidates.Count == 100, $"X candidates count {result.XCandidates.Count}");
+        Assert.True(result.YCandidates.Count == 100, $"Y candidates count {result.YCandidates.Count}");
+
+        // Uniform image should have compressible candidates for every row
+        foreach (var lc in result.XCandidates)
+        {
+            Assert.True(lc.Intervals.Count > 0, $"Row {lc.LineIndex} has no X candidates");
+        }
+        foreach (var lc in result.YCandidates)
+        {
+            Assert.True(lc.Intervals.Count > 0, $"Col {lc.LineIndex} has no Y candidates");
+        }
+    }
+
+    [Fact]
+    public void Analyze_ReportsFinalAxisResults()
+    {
+        byte[] img = CreateImageU8(100, 100, 128, 128, 128, 255);
+        var result = NinePatchCompressor.Analyze(img, 100, 100);
+
+        Assert.Equal(CompressStatus.Success, result.Status);
+        Assert.False(result.FinalX.IsIdentityFallback,
+            "Uniform image should find compressible X axis");
+        Assert.False(result.FinalY.IsIdentityFallback,
+            "Uniform image should find compressible Y axis");
+        Assert.True(result.FinalX.Begin < result.FinalX.End);
+        Assert.True(result.FinalY.Begin < result.FinalY.End);
+        Assert.True(result.FinalX.N < result.FinalX.End - result.FinalX.Begin,
+            $"X N={result.FinalX.N} should be less than span {result.FinalX.End - result.FinalX.Begin}");
+    }
+
+    [Fact]
+    public void Analyze_IdentityFallback_WhenNoValidCompression()
+    {
+        // A 2x2 image is too small to compress (minLength=8 by default)
+        byte[] tiny = [128, 128, 128, 255, 128, 128, 128, 255, 128, 128, 128, 255, 128, 128, 128, 255];
+        var result = NinePatchCompressor.Analyze(tiny, 2, 2);
+
+        Assert.Equal(CompressStatus.Success, result.Status);
+        Assert.True(result.FinalX.IsIdentityFallback);
+        Assert.True(result.FinalY.IsIdentityFallback);
+        Assert.Equal(2, result.FinalX.N);
+        Assert.Equal(2, result.FinalY.N);
+    }
+
+    [Fact]
+    public void Analyze_InvalidInput_ReturnsError()
+    {
+        byte[] bad = [128, 128, 128]; // Too few bytes
+        var result = NinePatchCompressor.Analyze(bad, 100, 100);
+
+        Assert.Equal(CompressStatus.InvalidInput, result.Status);
+        Assert.NotNull(result.Message);
+        Assert.Contains("!=", result.Message);
+    }
+
+    [Fact]
+    public void Analyze_YieldsSameFinalResultsAsCompress()
+    {
+        byte[] img = CreateImageU8(100, 100, 128, 128, 128, 255);
+        var compressResult = NinePatchCompressor.Compress(img, 100, 100);
+        var analyzeResult = NinePatchCompressor.Analyze(img, 100, 100);
+
+        Assert.Equal(CompressStatus.Success, compressResult.Status);
+        Assert.Equal(CompressStatus.Success, analyzeResult.Status);
+
+        var meta = compressResult.Meta!.Value;
+        Assert.Equal(meta.Xb, analyzeResult.FinalX.Begin);
+        Assert.Equal(meta.Xe, analyzeResult.FinalX.End);
+        Assert.Equal(meta.Nx, analyzeResult.FinalX.N);
+        Assert.Equal(meta.Yb, analyzeResult.FinalY.Begin);
+        Assert.Equal(meta.Ye, analyzeResult.FinalY.End);
+        Assert.Equal(meta.Ny, analyzeResult.FinalY.N);
+    }
+
     private static byte[] CreateHGradientU8(int w, int h)
     {
         var img = new byte[w * h * 4];

@@ -10,6 +10,8 @@ interface ComparePaneProps {
   bgClass: string;
   np: { xb: number; xe: number; yb: number; ye: number } | null;
   compressing: boolean;
+  onMousePixel?: (imgX: number, imgY: number) => void;
+  onMouseLeave?: () => void;
 }
 
 /**
@@ -20,6 +22,7 @@ export function ComparePane({
   originalUrl, reconstructedUrl,
   width, height, zoom, bgClass,
   np, compressing,
+  onMousePixel, onMouseLeave,
 }: ComparePaneProps) {
   const [ratio, setRatio] = useState(0.5);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -57,11 +60,27 @@ export function ComparePane({
 
   const dividerX = ratio * W;
 
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const mx = Math.floor((e.clientX - rect.left) / zoom);
+    const my = Math.floor((e.clientY - rect.top) / zoom);
+    if (mx >= 0 && mx < width && my >= 0 && my < height) {
+      onMousePixel?.(mx, my);
+    }
+  }, [zoom, width, height, onMousePixel]);
+
+  const handleMouseLeave = useCallback(() => {
+    onMouseLeave?.();
+  }, [onMouseLeave]);
+
   return (
     <div
       ref={containerRef}
       className={`relative ${bgClass} no-select`}
       style={{ width: W, height: H }}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
     >
       {/* Original — clipped to left of divider */}
       {originalUrl && (

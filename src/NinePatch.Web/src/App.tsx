@@ -1,12 +1,17 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { ImageUpload } from './components/ImageUpload'
 import { ComparePane } from './components/ComparePane'
 import { OutputPane } from './components/OutputPane'
-import { NinePatchOverlay } from './components/NinePatchOverlay'
+import { ImageViewport } from './components/ImageViewport'
+import { PixelInspector, type PixelInfo } from './components/PixelInspector'
 import { BackgroundPicker, getBgClass } from './components/BackgroundPicker'
 import { ZoomPicker } from './components/ZoomPicker'
+import { ViewSelector, type ViewId } from './components/ViewSelector'
 import { ErrorDisplay } from './components/ErrorDisplay'
 import { useCompressor } from './hooks/useCompressor'
+import { useDebugAnalyze } from './hooks/useDebugAnalyze'
+import { buildCoordMapping } from './utils/coordinateMapping'
+import { createXCandidateOverlay, createYCandidateOverlay, startAnimationLoop } from './utils/debugOverlay'
 import type { CompressParams, NinePatchMeta } from './wasm/types'
 
 /** Upscale a compressed image back to original dims using nine-patch mapping. */
@@ -28,7 +33,6 @@ function buildReconstructed(
       ctx.imageSmoothingQuality = 'high'
 
       const { xb, xe, yb, ye } = meta
-      // Corner sizes are preserved between compressed and original images
       const cornerL = xb, cornerR = origW - xe
       const cornerT = yb, cornerB = origH - ye
       const compCornerL = cornerL, compCornerR = cornerR
@@ -55,8 +59,21 @@ function buildReconstructed(
   })
 }
 
+/** Read pixel from image URL into {r,g,b,a}. Uses a temp canvas. */
+function readPixel(img: HTMLImageElement, x: number, y: number) {
+  if (x < 0 || x >= img.naturalWidth || y < 0 || y >= img.naturalHeight) return null
+  const c = document.createElement('canvas')
+  c.width = img.naturalWidth
+  c.height = img.naturalHeight
+  const ctx = c.getContext('2d')!
+  ctx.drawImage(img, 0, 0)
+  const d = ctx.getImageData(x, y, 1, 1).data
+  return { r: d[0], g: d[1], b: d[2], a: d[3] }
+}
+
 function App() {
   const { wasmReady, wasmError, result, compressing, runCompress, resetResult } = useCompressor()
+  const { debugResult, debugLoading, debugError, triggerAnalyze, resetDebug } = useDebugAnalyze()
   const [params, setParams] = useState<CompressParams>({ threshold: 4, margin: 0, minLength: 8 })
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [imageData, setImageData] = useState<ImageData | null>(null)
@@ -70,18 +87,46 @@ function App() {
   // Shared view settings
   const [bg, setBg] = useState('checker-dark')
   const [zoom, setZoom] = useState(2)
-  const [dividerRatio, setDividerRatio] = useState(0.5)
+  const [view, setView] = useState<ViewId>('compare')
+
+  // Animation phase for debug overlays
+  const [animPhase, setAnimPhase] = useState(0)
+  useEffect(() => startAnimationLoop(setAnimPhase), [])
+
+  // Pixel inspector state
+  const [inspectorSamples, setInspectorSamples] = useState<[PixelInfo, PixelInfo] | null>(null)
+  const [inspectorVisible, setInspectorVisible] = useState(false)
+  const origImgRef = useRef<HTMLImageElement | null>(null)
+  const compImgRef = useRef<HTMLImageElement | null>(null)
 
   const bgCls = getBgClass(bg)
   const meta = result?.status === 0 ? result.metadata ?? null : null
+
+  // Load original and compressed images as HTMLImageElements for pixel reads
+  useEffect(() => {
+    if (imageUrl) {
+      const img = new Image()
+      img.onload = () => { origImgRef.current = img }
+      img.src = imageUrl
+    }
+  }, [imageUrl])
+
+  useEffect(() => {
+    if (compressedUrl) {
+      const img = new Image()
+      img.onload = () => { compImgRef.current = img }
+      img.src = compressedUrl
+    }
+  }, [compressedUrl])
+
+  // Coordinate mapping
+  const coordMapping = useMemo(() => meta ? buildCoordMapping(meta) : null, [meta])
 
   // Compressed nine-patch rect in compressed coordinates
   const compNp = useMemo(() => {
     if (!meta) return null
     const cornerL = meta.xb
     const cornerT = meta.yb
-    const cornerR = meta.original_width - meta.xe
-    const cornerB = meta.original_height - meta.ye
     return {
       xb: cornerL,
       xe: cornerL + meta.nx,
@@ -89,6 +134,28 @@ function App() {
       ye: cornerT + meta.ny,
     }
   }, [meta])
+
+  // Trigger lazy debug analyze when entering debug views
+  useEffect(() => {
+    if ((view === 'debug-x' || view === 'debug-y') && imageData && !debugResult && !debugLoading) {
+      triggerAnalyze(
+        new Uint8Array(imageData.data.buffer),
+        imageData.width, imageData.height,
+        params,
+      )
+    }
+  }, [view, imageData, debugResult, debugLoading, params, triggerAnalyze])
+
+  // Debug overlay renderers
+  const xOverlayRenderer = useMemo(() => {
+    if (!debugResult?.x_candidates) return undefined
+    return createXCandidateOverlay(debugResult.x_candidates, animPhase)
+  }, [debugResult?.x_candidates, animPhase])
+
+  const yOverlayRenderer = useMemo(() => {
+    if (!debugResult?.y_candidates) return undefined
+    return createYCandidateOverlay(debugResult.y_candidates, animPhase)
+  }, [debugResult?.y_candidates, animPhase])
 
   const handleImageLoaded = useCallback((data: ImageData, url: string, w: number, h: number) => {
     setImageData(data)
@@ -99,11 +166,8 @@ function App() {
     setImgWidth(w)
     setImgHeight(h)
     resetResult()
-  }, [resetResult])
-
-  const handleImageChanged = useCallback(() => {
-    // URL revocation handled when a new image arrives
-  }, [])
+    resetDebug()
+  }, [resetResult, resetDebug])
 
   const handleCompress = useCallback(async () => {
     if (!imageData) return
@@ -111,7 +175,10 @@ function App() {
     setReconstructedUrl(null)
     setDone(false)
     await runCompress(imageData, params)
-  }, [imageData, params, runCompress])
+    resetDebug()
+    // Auto-switch to compare view after compression
+    setView('compare')
+  }, [imageData, params, runCompress, resetDebug])
 
   // When WASM result arrives, generate compressed + reconstructed previews
   useEffect(() => {
@@ -131,7 +198,6 @@ function App() {
       const cUrl = canvas.toDataURL('image/png')
       setCompressedUrl(cUrl)
 
-      // Upscale back to original size for compare view
       buildReconstructed(cUrl, result.metadata!.original_width, result.metadata!.original_height, result.metadata!)
         .then((rUrl) => {
           setReconstructedUrl(rUrl)
@@ -151,10 +217,6 @@ function App() {
       } else if (e.key.toLowerCase() === 'b') {
         const opts = ['checker-dark', 'checker-light', 'black', 'white'] as const
         setBg(opts[(opts.indexOf(bg as typeof opts[number]) + 1) % opts.length])
-      } else if (e.key === '[') {
-        setDividerRatio(r => Math.max(0, r - 0.05))
-      } else if (e.key === ']') {
-        setDividerRatio(r => Math.min(1, r + 0.05))
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -190,6 +252,76 @@ function App() {
     setCompressedUrl(null)
     setDone(false)
   }, [])
+
+  // Pixel inspector logic: compute both original and compressed pixel info
+  const handlePixelInspector = useCallback((
+    imgX: number, imgY: number,
+    sourceView: 'original' | 'compressed',
+  ) => {
+    if (!meta || !coordMapping) {
+      setInspectorVisible(false)
+      return
+    }
+
+    const origImg = origImgRef.current
+    const compImg = compImgRef.current
+
+    if (sourceView === 'original') {
+      // Mouse is over an original-image viewport
+      const origPx = origImg ? readPixel(origImg, imgX, imgY) : null
+      const mapped = coordMapping.originalToCompressed(imgX, imgY)
+
+      const s1: PixelInfo = {
+        label: 'Original',
+        x: imgX, y: imgY,
+        r: origPx?.r ?? 0, g: origPx?.g ?? 0, b: origPx?.b ?? 0, a: origPx?.a ?? 0,
+      }
+
+      let s2: PixelInfo
+      if (mapped) {
+        const compPx = compImg ? readPixel(compImg, mapped.cx, mapped.cy) : null
+        s2 = {
+          label: 'Compressed',
+          x: mapped.cx, y: mapped.cy,
+          r: compPx?.r ?? 0, g: compPx?.g ?? 0, b: compPx?.b ?? 0, a: compPx?.a ?? 0,
+        }
+      } else {
+        s2 = { label: 'Compressed', x: -1, y: -1, r: 0, g: 0, b: 0, a: 0 }
+      }
+
+      setInspectorSamples([s1, s2])
+      setInspectorVisible(true)
+    } else {
+      // Mouse is over compressed-image viewport
+      const compPx = compImg ? readPixel(compImg, imgX, imgY) : null
+      const mapped = coordMapping.compressedToOriginal(imgX, imgY)
+
+      const s1: PixelInfo = {
+        label: 'Compressed',
+        x: imgX, y: imgY,
+        r: compPx?.r ?? 0, g: compPx?.g ?? 0, b: compPx?.b ?? 0, a: compPx?.a ?? 0,
+      }
+
+      let s2: PixelInfo
+      if (mapped) {
+        const origPx = origImg ? readPixel(origImg, mapped.ox, mapped.oy) : null
+        s2 = {
+          label: 'Original',
+          x: mapped.ox, y: mapped.oy,
+          r: origPx?.r ?? 0, g: origPx?.g ?? 0, b: origPx?.b ?? 0, a: origPx?.a ?? 0,
+          xRange: mapped.oxRange,
+          yRange: mapped.oyRange,
+        }
+      } else {
+        s2 = { label: 'Original', x: -1, y: -1, r: 0, g: 0, b: 0, a: 0 }
+      }
+
+      setInspectorSamples([s2, s1])
+      setInspectorVisible(true)
+    }
+  }, [meta, coordMapping])
+
+  const hideInspector = useCallback(() => setInspectorVisible(false), [])
 
   const origNp = meta ? { xb: meta.xb, xe: meta.xe, yb: meta.yb, ye: meta.ye } : null
 
@@ -254,7 +386,7 @@ function App() {
             ) : (
               <ImageUpload
                 onImageLoaded={handleImageLoaded}
-                onImageChanged={handleImageChanged}
+                onImageChanged={() => {}}
                 onFileName={setFileName}
               />
             )}
@@ -289,22 +421,17 @@ function App() {
                    style={{ borderColor: 'var(--line)' }}>
             <div className="label">压缩参数</div>
 
-            {/* Threshold */}
             <ParamField label="误差阈值" value={params.threshold}
                         onChange={(v) => setParams(p => ({ ...p, threshold: v }))}
                         min={0} max={32} step={0.5} suffix=" / 255" />
 
-            {/* Margin */}
             <ParamField label="最小角尺寸" value={params.margin}
                         onChange={(v) => setParams(p => ({ ...p, margin: v }))}
                         min={0} max={32} step={1} suffix=" px" />
 
-            {/* MinLength */}
             <ParamField label="最小拉伸长度" value={params.minLength}
                         onChange={(v) => setParams(p => ({ ...p, minLength: v }))}
                         min={2} max={64} step={1} suffix=" px" />
-
-            {/* Min Savings */}
           </section>
 
           {/* Action */}
@@ -349,9 +476,6 @@ function App() {
                 <span>切换缩放</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>4</kbd> <kbd>8</kbd></span>
               </div>
               <div className="flex items-center justify-between">
-                <span>对比滑到左/右</span><span><kbd>[</kbd> <kbd>]</kbd></span>
-              </div>
-              <div className="flex items-center justify-between">
                 <span>切换背景</span><span><kbd>B</kbd></span>
               </div>
             </div>
@@ -364,6 +488,7 @@ function App() {
           <div className="flex items-center justify-between gap-4 px-5 py-2.5 border-b"
                style={{ borderColor: 'var(--line)', background: 'var(--panel)' }}>
             <div className="flex items-center gap-5">
+              <ViewSelector value={view} onChange={setView} hasResult={done} />
               <BackgroundPicker value={bg} onChange={setBg} />
               <ZoomPicker value={zoom} onChange={setZoom} />
             </div>
@@ -392,31 +517,36 @@ function App() {
           {/* Canvas area */}
           <div className="flex-1 min-h-0 overflow-auto scrollbar-slim workbench p-8">
             <div className="flex flex-col gap-8 items-start">
-              {/* Compare */}
-              {imageUrl && imageData && (
-                <div>
+
+              {/* Compare View */}
+              {view === 'compare' && imageUrl && imageData && (
+                <div className="relative">
                   <div className="flex items-center gap-3 mb-2">
                     <span className="label-lg">原图 · 重建图 对比</span>
-                    <span className="hint">拖动中间分割条</span>
                   </div>
-                  <div className="inline-block" style={{ boxShadow: '0 8px 28px rgba(0,0,0,0.4)', border: '1px solid var(--line-hi)' }}>
-                    <ComparePane
-                      originalUrl={imageUrl}
-                      reconstructedUrl={reconstructedUrl}
-                      width={imgWidth}
-                      height={imgHeight}
-                      zoom={zoom}
-                      bgClass={bgCls}
-                      np={origNp}
-                      compressing={compressing}
-                    />
-                  </div>
+                  <ComparePane
+                    originalUrl={imageUrl}
+                    reconstructedUrl={reconstructedUrl}
+                    width={imgWidth}
+                    height={imgHeight}
+                    zoom={zoom}
+                    bgClass={bgCls}
+                    np={origNp}
+                    compressing={compressing}
+                    onMousePixel={(imgX, imgY) => handlePixelInspector(imgX, imgY, 'original')}
+                    onMouseLeave={hideInspector}
+                  />
+                  {inspectorVisible && inspectorSamples && (
+                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30">
+                      <PixelInspector samples={inspectorSamples} visible={true} />
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Output */}
-              {meta && (
-                <div>
+              {/* Compressed View */}
+              {view === 'compressed' && meta && (
+                <div className="relative">
                   <div className="flex items-center gap-3 mb-2">
                     <span className="label-lg">压缩输出</span>
                     {done && (
@@ -432,12 +562,85 @@ function App() {
                     zoom={zoom}
                     bgClass={bgCls}
                     np={compNp}
+                    onMousePixel={(imgX, imgY) => handlePixelInspector(imgX, imgY, 'compressed')}
+                    onMouseLeave={hideInspector}
                   />
+                  {inspectorVisible && inspectorSamples && (
+                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30">
+                      <PixelInspector samples={inspectorSamples} visible={true} />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Debug X Rows View */}
+              {view === 'debug-x' && imageUrl && meta && (
+                <div className="relative">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="label-lg">Debug X 行候选</span>
+                    {debugLoading && (
+                      <span className="hint">分析中…</span>
+                    )}
+                    {debugError && (
+                      <span className="hint" style={{ color: 'var(--danger)' }}>分析失败: {debugError}</span>
+                    )}
+                  </div>
+                  {debugResult?.status === 0 && xOverlayRenderer && (
+                    <ImageViewport
+                      src={imageUrl}
+                      width={imgWidth}
+                      height={imgHeight}
+                      zoom={zoom}
+                      bgClass={bgCls}
+                      np={origNp}
+                      renderOverlay={xOverlayRenderer}
+                      onMousePixel={(imgX, imgY) => handlePixelInspector(imgX, imgY, 'original')}
+                      onMouseLeave={hideInspector}
+                    />
+                  )}
+                  {inspectorVisible && inspectorSamples && (
+                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30">
+                      <PixelInspector samples={inspectorSamples} visible={true} />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Debug Y Columns View */}
+              {view === 'debug-y' && imageUrl && meta && (
+                <div className="relative">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="label-lg">Debug Y 列候选</span>
+                    {debugLoading && (
+                      <span className="hint">分析中…</span>
+                    )}
+                    {debugError && (
+                      <span className="hint" style={{ color: 'var(--danger)' }}>分析失败: {debugError}</span>
+                    )}
+                  </div>
+                  {debugResult?.status === 0 && yOverlayRenderer && (
+                    <ImageViewport
+                      src={imageUrl}
+                      width={imgWidth}
+                      height={imgHeight}
+                      zoom={zoom}
+                      bgClass={bgCls}
+                      np={origNp}
+                      renderOverlay={yOverlayRenderer}
+                      onMousePixel={(imgX, imgY) => handlePixelInspector(imgX, imgY, 'original')}
+                      onMouseLeave={hideInspector}
+                    />
+                  )}
+                  {inspectorVisible && inspectorSamples && (
+                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30">
+                      <PixelInspector samples={inspectorSamples} visible={true} />
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* Stats row */}
-              {meta && done && (
+              {meta && done && view === 'compare' && (
                 <div className="panel p-4 w-full" style={{ maxWidth: 720 }}>
                   <StatsRow meta={meta} />
                   <div className="mono text-[11px] mt-3 pt-3 border-t"
@@ -450,7 +653,7 @@ function App() {
 
               {/* Empty state */}
               {!imageUrl && (
-                <div className="card text-center text-gray-400 py-12" style={{ background: 'var(--panel)', borderColor: 'var(--line)', color: 'var(--text-faint)' }}>
+                <div className="card text-center py-12" style={{ background: 'var(--panel)', borderColor: 'var(--line)', color: 'var(--text-faint)' }}>
                   <p>请上传一张 PNG 图片开始压缩</p>
                 </div>
               )}

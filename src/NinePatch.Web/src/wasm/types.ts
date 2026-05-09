@@ -29,3 +29,26 @@ export interface CompressParams {
   margin: number;
   minLength: number;
 }
+
+// ── Analyze / Debug types ──
+
+export interface DebugAxisResult {
+  begin: number;
+  end: number;
+  n: number;
+  is_identity_fallback: boolean;
+}
+
+export interface DebugLineCandidates {
+  line: number;
+  intervals: [number, number][];
+}
+
+export interface AnalyzeResult {
+  status: number;
+  message: string;
+  final_x?: DebugAxisResult;
+  final_y?: DebugAxisResult;
+  x_candidates?: DebugLineCandidates[];
+  y_candidates?: DebugLineCandidates[];
+}

@@ -1,4 +1,4 @@
-import type { CompressResult } from './types';
+import type { CompressResult, AnalyzeResult } from './types';
 
 interface DotnetInstance {
   withDiagnosticTracing(enabled: boolean): DotnetInstance;
@@ -13,6 +13,7 @@ interface WasmInstance {
     Wasm: {
       WasmExports: {
         Compress: (rgba: Uint8Array, w: number, h: number, threshold: number, margin: number, minLength: number) => string;
+        Analyze: (rgba: Uint8Array, w: number, h: number, threshold: number, margin: number, minLength: number) => string;
         GetVersion: () => string;
       };
     };
@@ -34,7 +35,7 @@ export async function loadWasm(): Promise<void> {
     const { dotnet } = await importDotnet('/_framework/dotnet.js') as any;
 
     const instance = await (dotnet as DotnetInstance).withDiagnosticTracing(false).create();
-    wasmExports = await instance.getAssemblyExports('NinePatch.Wasm.dll');
+    wasmExports = await instance.getAssemblyExports('NinePatch.Wasm.dll') as WasmInstance;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).__wasmInstance = instance;
   })();
@@ -54,6 +55,21 @@ export async function compress(
     await loadWasm();
   }
   const json = wasmExports!.NinePatch.Wasm.WasmExports.Compress(rgba, width, height, threshold, margin, minLength);
+  return JSON.parse(json);
+}
+
+export async function analyze(
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+  threshold: number,
+  margin: number,
+  minLength: number,
+): Promise<AnalyzeResult> {
+  if (!wasmExports) {
+    await loadWasm();
+  }
+  const json = wasmExports!.NinePatch.Wasm.WasmExports.Analyze(rgba, width, height, threshold, margin, minLength);
   return JSON.parse(json);
 }
 
